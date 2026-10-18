@@ -24,7 +24,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+dashboard = ["fastapi>=0.115", "uvicorn>=0.30"]
+dev = ["pytest", "ruff", "fastapi>=0.115", "httpx>=0.27"]
 
 [project.scripts]
 moss-lora-cache = "moss_lora.cache:main"
@@ -33,9 +34,13 @@ moss-lora-sample = "moss_lora.sample:main"
 moss-lora-merge = "moss_lora.merge:main"
 moss-lora-bench = "moss_lora.benchmark:main"
 moss-lora-export-comfy = "moss_lora.export_comfy:main"
+moss-lora-dashboard = "moss_lora.dashboard:main"
 
 [tool.setuptools.packages.find]
 include = ["moss_lora*"]
+
+[tool.setuptools.package-data]
+moss_lora = ["dashboard.html"]
 
 [tool.ruff]
 line-length = 110

@@ -1,0 +1,1889 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="referrer" content="no-referrer">
+<title>MOSS-Image LoRA · telemetry</title>
+<style>
+  :root {
+    --paper: #E8EEF1;
+    --paper-hi: #F4F8F9;
+    --ink: #10191F;
+    --muted: #52636B;
+    --rule: #C3D1D8;
+    --rule-strong: #9FB2BC;
+    --vermilion: #C53B2C;
+    --cobalt: #1F5FBF;
+    --olive: #8FA400;
+    --amber: #B9770E;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --display: "Arial Narrow", "Liberation Sans Narrow", "DejaVu Sans Condensed",
+               "Helvetica Neue Condensed", "Roboto Condensed", Impact, var(--sans);
+    --mono: ui-monospace, "SFMono-Regular", "SF Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    --pad: 30px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { background: var(--paper); }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .frame {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 var(--pad);
+  }
+
+  .skip {
+    position: absolute;
+    left: 12px;
+    top: -60px;
+    z-index: 20;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 8px 12px;
+    font: 11px var(--mono);
+    text-decoration: none;
+  }
+  .skip:focus { top: 12px; }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  button, select { font: inherit; }
+  button { color: inherit; }
+
+  :focus-visible {
+    outline: 2px solid var(--cobalt);
+    outline-offset: 2px;
+  }
+
+  /* ---------------------------------------------------------------- masthead */
+
+  .mast {
+    border-bottom: 2px solid var(--ink);
+    padding-top: 18px;
+  }
+
+  .mast-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    min-width: 0;
+  }
+
+  .brand-mark {
+    width: 17px;
+    height: 17px;
+    border: 1px solid var(--ink);
+    position: relative;
+    flex: none;
+  }
+  .brand-mark::before,
+  .brand-mark::after {
+    content: "";
+    position: absolute;
+    background: var(--ink);
+  }
+  .brand-mark::before { left: 7px; top: -4px; width: 1px; height: 25px; }
+  .brand-mark::after { top: 7px; left: -4px; height: 1px; width: 25px; }
+
+  h1 {
+    margin: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .brand-main {
+    font-family: var(--display);
+    font-stretch: condensed;
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: .015em;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .brand-sub {
+    font: 9px/1 var(--mono);
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .session {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .field-label {
+    font: 9px/1 var(--display);
+    font-stretch: condensed;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .select-wrap { position: relative; min-width: 0; }
+
+  select {
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: 1px solid var(--ink);
+    border-radius: 0;
+    color: var(--ink);
+    font: 12px var(--mono);
+    padding: 6px 29px 6px 9px;
+    min-width: 190px;
+    max-width: 34vw;
+    cursor: pointer;
+  }
+  select:hover { background: var(--paper-hi); }
+  .select-wrap::after {
+    content: "";
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    border-right: 1px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+    transform: translateY(-72%) rotate(45deg);
+    pointer-events: none;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid currentColor;
+    padding: 3px 7px 3px 6px;
+    font: 9px/1.3 var(--mono);
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .badge i { display: block; width: 6px; height: 6px; background: currentColor; }
+  .badge-key { opacity: .55; margin-right: -2px; }
+  .badge[data-status="running"] { color: var(--olive); }
+  .badge[data-status="finished"] { color: var(--cobalt); }
+  .badge[data-status="stale"] { color: var(--amber); }
+  .badge[data-status="unknown"] { color: var(--muted); }
+
+  .conn {
+    font: 9px var(--mono);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+    border-left: 1px solid var(--rule);
+    padding-left: 10px;
+  }
+  .conn[data-state="live"] { color: var(--olive); }
+  .conn[data-state="offline"] { color: var(--amber); }
+
+  .headline {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 32px;
+    padding: 20px 0 14px;
+  }
+
+  .step-line { display: flex; align-items: baseline; gap: 9px; }
+
+  .step-now {
+    font-family: var(--display);
+    font-stretch: condensed;
+    font-size: clamp(54px, 8.2vw, 92px);
+    font-weight: 700;
+    line-height: .8;
+    letter-spacing: -.012em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .step-of {
+    font: 17px var(--mono);
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.03em;
+  }
+
+  .step-caption {
+    display: flex;
+    gap: 16px;
+    margin-top: 9px;
+    font: 9px var(--mono);
+    letter-spacing: .17em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .head-meta {
+    display: grid;
+    grid-template-columns: repeat(4, auto);
+    gap: 16px 26px;
+    margin: 0;
+    padding-bottom: 2px;
+  }
+  .head-meta dt {
+    font: 9px/1 var(--display);
+    font-stretch: condensed;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .head-meta dd {
+    margin: 4px 0 0;
+    font: 13px var(--mono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  #eta { font-size: 17px; letter-spacing: -.03em; }
+
+  /* signature: the loss tape ------------------------------------------------ */
+
+  .tape {
+    border-top: 1px solid var(--rule);
+    padding-top: 8px;
+  }
+
+  .tape-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    font: 9px var(--mono);
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  .tape-strip {
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    gap: 2px;
+    height: 58px;
+    border-bottom: 1px solid var(--ink);
+    overflow: hidden;
+  }
+
+  .tape-strip i {
+    flex: 1 1 0;
+    min-width: 1px;
+    max-width: 18px;
+    height: 2px;
+    background: var(--muted);
+    opacity: .92;
+  }
+  .tape-strip i.live {
+    animation: tape-pulse 1.9s steps(2, end) infinite;
+  }
+
+  @keyframes tape-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .35; }
+  }
+
+  /* notice ------------------------------------------------------------------ */
+
+  .notice {
+    border-bottom: 1px solid var(--amber);
+    color: #6B4708;
+    padding: 8px 0;
+    font: 10px var(--mono);
+    letter-spacing: .07em;
+    text-transform: uppercase;
+  }
+
+  /* stats ------------------------------------------------------------------- */
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    border-bottom: 1px solid var(--ink);
+  }
+
+  .stat {
+    padding: 14px 14px 16px;
+    border-left: 1px solid var(--rule);
+    min-width: 0;
+  }
+  .stat:first-child { border-left: 0; padding-left: 0; }
+
+  .stat dt {
+    font: 9px/1 var(--display);
+    font-stretch: condensed;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .stat dd {
+    margin: 5px 0 0;
+    font: 19px var(--mono);
+    letter-spacing: -.045em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .stat dd .unit {
+    font-size: 10px;
+    letter-spacing: 0;
+    color: var(--muted);
+    margin-left: 2px;
+  }
+  .stat.loss dd { color: var(--vermilion); }
+  .stat.lr dd { color: var(--cobalt); }
+
+  /* charts ------------------------------------------------------------------ */
+
+  .plots { border-bottom: 1px solid var(--ink); }
+
+  .fig { margin: 0; padding: 18px 0 8px; }
+  .fig + .fig { border-top: 1px solid var(--rule); padding-top: 15px; }
+
+  .fig-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 3px;
+  }
+
+  .fig-title {
+    margin: 0;
+    font: 10px/1 var(--display);
+    font-stretch: condensed;
+    letter-spacing: .17em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    font: 10px var(--mono);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: #4A5A62;
+    white-space: nowrap;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { display: inline-block; width: 20px; height: 0; border-top: 2px solid var(--vermilion); }
+  .swatch.ema { border-top: 1.5px dashed var(--ink); }
+  .swatch.lr { border-top: 2px solid var(--cobalt); }
+
+  .chart-wrap { position: relative; }
+
+  .chart {
+    display: block;
+    width: 100%;
+    height: 252px;
+    overflow: visible;
+  }
+  .fig-lr .chart { height: 152px; }
+
+  .chart text {
+    font-family: var(--mono);
+    font-size: 10px;
+    fill: #46565E;
+    letter-spacing: .01em;
+  }
+  .chart .grid { stroke: var(--rule); stroke-width: 1; }
+  .chart .axis { stroke: var(--rule-strong); stroke-width: 1; }
+  .chart .raw { fill: none; stroke: var(--vermilion); stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .ema { fill: none; stroke: var(--ink); stroke-width: 1.2; stroke-dasharray: 5 4; opacity: .72; }
+  .chart .lrs { fill: none; stroke: var(--cobalt); stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .cross { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; opacity: .65; }
+  .chart .dot { fill: var(--vermilion); stroke: var(--paper-hi); stroke-width: 1.5; }
+  .chart .dot.lr { fill: var(--cobalt); }
+  .chart .empty {
+    fill: var(--muted);
+    font-size: 10px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+  }
+
+  .tip {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: none;
+    z-index: 4;
+    pointer-events: none;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 5px 7px;
+    font: 10px/1.4 var(--mono);
+    letter-spacing: .02em;
+    white-space: pre;
+    transform: translate(-50%, -118%);
+  }
+
+  /* samples / side columns -------------------------------------------------- */
+
+  .columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1.75fr) minmax(300px, 1fr);
+    border-bottom: 1px solid var(--ink);
+  }
+
+  .samples {
+    padding: 20px 26px 24px 0;
+    border-right: 1px solid var(--rule);
+    min-width: 0;
+  }
+
+  .side { padding: 20px 0 24px 26px; min-width: 0; }
+  .side section + section { margin-top: 22px; }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  h2 {
+    margin: 0;
+    font: 10px/1 var(--display);
+    font-stretch: condensed;
+    letter-spacing: .17em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+
+  .section-note {
+    font: 9px var(--mono);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-align: right;
+  }
+
+  .tabs {
+    display: flex;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--rule-strong);
+    margin-bottom: 12px;
+    scrollbar-width: thin;
+  }
+
+  .tabs button {
+    appearance: none;
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 7px 11px;
+    font: 10px var(--mono);
+    letter-spacing: .05em;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .tabs button:first-child { padding-left: 0; }
+  .tabs button:hover { color: var(--ink); }
+  .tabs button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+  .tabs button:focus-visible { outline-offset: -2px; }
+
+  .contact {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    gap: 10px;
+  }
+
+  .tile {
+    position: relative;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--rule-strong);
+    border-radius: 0;
+    background: var(--paper-hi);
+    aspect-ratio: 1;
+    overflow: hidden;
+    cursor: zoom-in;
+    display: block;
+  }
+  .tile img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: saturate(.94);
+  }
+  .tile:hover img { filter: none; }
+  .tile .stamp {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    background: var(--paper);
+    border-top: 1px solid var(--ink);
+    border-right: 1px solid var(--ink);
+    padding: 2px 5px;
+    font: 9px var(--mono);
+    letter-spacing: .05em;
+    color: var(--ink);
+  }
+  .tile .idx {
+    position: absolute;
+    right: 0;
+    top: 0;
+    background: var(--paper);
+    border-bottom: 1px solid var(--rule-strong);
+    border-left: 1px solid var(--rule-strong);
+    padding: 1px 5px;
+    font: 9px var(--mono);
+    color: var(--muted);
+  }
+
+  .tile.latent {
+    cursor: default;
+    background: var(--paper);
+    border-style: dashed;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .latent-mark {
+    text-align: center;
+    font: 9px var(--mono);
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0 8px;
+  }
+  .latent-mark::before {
+    content: "";
+    display: block;
+    width: 17px;
+    height: 17px;
+    margin: 0 auto 8px;
+    border: 1px solid var(--rule-strong);
+    box-shadow: inset 0 0 0 4px var(--paper), inset 0 0 0 5px var(--rule-strong);
+  }
+  .latent-mark small {
+    display: block;
+    margin-top: 4px;
+    font-size: 8px;
+    letter-spacing: .04em;
+    text-transform: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 120px;
+  }
+
+  .quiet {
+    margin: 10px 0 0;
+    font: 11px/1.6 var(--mono);
+    color: var(--muted);
+  }
+
+  /* tables + config --------------------------------------------------------- */
+
+  .table-wrap { overflow-x: auto; }
+
+  table { width: 100%; border-collapse: collapse; }
+
+  th {
+    font: 9px/1 var(--display);
+    font-stretch: condensed;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 400;
+    text-align: right;
+    padding: 0 0 6px;
+    border-bottom: 1px solid var(--ink);
+    white-space: nowrap;
+  }
+  th:first-child, td:first-child { text-align: left; }
+
+  td {
+    font: 11px var(--mono);
+    font-variant-numeric: tabular-nums;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--rule);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .config {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 18px;
+    margin: 0;
+  }
+  .config div {
+    padding: 7px 0;
+    border-bottom: 1px solid var(--rule);
+    min-width: 0;
+  }
+  .config div.wide { grid-column: 1 / -1; }
+  .config dt {
+    font: 9px/1 var(--display);
+    font-stretch: condensed;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .config dd {
+    margin: 3px 0 0;
+    font: 11px/1.45 var(--mono);
+    overflow-wrap: anywhere;
+  }
+
+  /* empty state ------------------------------------------------------------- */
+
+  .empty {
+    padding: 76px 0 96px;
+    max-width: 760px;
+  }
+
+  .eyebrow {
+    margin: 0 0 14px;
+    font: 10px var(--mono);
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--vermilion);
+  }
+
+  .empty h2 {
+    margin: 0;
+    font-family: var(--display);
+    font-stretch: condensed;
+    font-size: clamp(30px, 4.6vw, 46px);
+    font-weight: 700;
+    line-height: 1.02;
+    letter-spacing: -.005em;
+    text-transform: none;
+  }
+
+  .empty p {
+    margin: 14px 0 0;
+    max-width: 600px;
+    font: 13px/1.65 var(--sans);
+    color: var(--muted);
+  }
+
+  .empty code { font-family: var(--mono); color: var(--ink); }
+
+  .command {
+    margin: 22px 0 0;
+    border: 1px solid var(--ink);
+    background: var(--paper-hi);
+    padding: 14px 16px;
+    font: 12px/1.5 var(--mono);
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .command::before { content: "$ "; color: var(--muted); }
+
+  .empty .hint {
+    margin-top: 16px;
+    font: 10px var(--mono);
+    letter-spacing: .04em;
+    color: var(--muted);
+  }
+
+  /* footer ------------------------------------------------------------------ */
+
+  .foot {
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 14px 0 28px;
+    font: 9px var(--mono);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* lightbox ---------------------------------------------------------------- */
+
+  .lightbox {
+    border: 1px solid var(--ink);
+    padding: 0;
+    background: var(--paper);
+    max-width: min(92vw, 1100px);
+    max-height: 92vh;
+    border-radius: 0;
+  }
+  .lightbox::backdrop { background: rgba(16, 25, 31, .76); }
+  .lightbox form { margin: 0; }
+  .lightbox figure { margin: 0; display: flex; flex-direction: column; }
+  .lightbox img {
+    display: block;
+    max-width: 100%;
+    max-height: 78vh;
+    object-fit: contain;
+    background: #fff;
+  }
+  .lightbox figcaption {
+    padding: 8px 42px 8px 10px;
+    border-top: 1px solid var(--rule);
+    font: 10px var(--mono);
+    letter-spacing: .03em;
+    color: var(--muted);
+  }
+  .lightbox-close {
+    position: absolute;
+    right: 0;
+    top: 0;
+    z-index: 2;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-left: 1px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+    border-radius: 0;
+    background: var(--paper);
+    font: 17px/1 var(--mono);
+    cursor: pointer;
+  }
+
+  /* responsive -------------------------------------------------------------- */
+
+  @media (max-width: 1080px) {
+    .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .stat:nth-child(4n + 1) { border-left: 0; padding-left: 0; }
+    .columns { grid-template-columns: minmax(0, 1.5fr) minmax(270px, 1fr); }
+    .config { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 900px) {
+    .mast-row { flex-wrap: wrap; }
+    .session { width: 100%; }
+    select { max-width: none; flex: 1; }
+    .headline { align-items: flex-start; flex-direction: column; gap: 18px; }
+    .head-meta { grid-template-columns: repeat(4, minmax(0, 1fr)); width: 100%; }
+    .columns { grid-template-columns: 1fr; }
+    .samples { border-right: 0; padding-right: 0; }
+    .side { border-top: 1px solid var(--ink); padding-left: 0; }
+    .config { grid-template-columns: 1fr 1fr; }
+  }
+
+  @media (max-width: 640px) {
+    :root { --pad: 16px; }
+    .brand-sub { display: none; }
+    .session { flex-wrap: wrap; }
+    .session .field-label { display: none; }
+    .select-wrap { flex: 1 1 100%; }
+    select { width: 100%; }
+    select { padding: 10px 30px 10px 10px; min-height: 44px; }
+    .tabs button { padding: 12px 12px; min-height: 44px; }
+    .conn { border-left: 0; padding-left: 0; }
+    .step-now { font-size: 50px; }
+    .head-meta { grid-template-columns: 1fr 1fr; gap: 12px 18px; }
+    .stats { grid-template-columns: 1fr 1fr; }
+    .stat:nth-child(2n + 1) { border-left: 0; padding-left: 0; }
+    .stat:nth-child(n + 3) { border-top: 1px solid var(--rule); }
+    .chart { height: 208px; }
+    .fig-lr .chart { height: 136px; }
+    .contact { grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: 8px; }
+    .config { grid-template-columns: 1fr; }
+    .legend { gap: 10px; }
+    .tape-strip { height: 44px; }
+    .tape-strip i { max-width: 10px; }
+    .foot { flex-direction: column; gap: 6px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation: none !important;
+      transition: none !important;
+      scroll-behavior: auto !important;
+    }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to telemetry</a>
+<div class="frame">
+  <header class="mast">
+    <div class="mast-row">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <h1>
+          <span class="brand-main">MOSS-IMAGE</span>
+          <span class="brand-sub">LoRA telemetry</span>
+        </h1>
+      </div>
+      <div class="session">
+        <label class="field-label" for="run-select">Run</label>
+        <span class="select-wrap">
+          <select id="run-select" aria-label="Training run"></select>
+        </span>
+        <span id="status-badge" class="badge" data-status="unknown"><i aria-hidden="true"></i><span class="badge-key">run</span><span id="status-text">no run</span></span>
+        <span id="conn" class="conn" role="status" aria-live="polite" data-state="connecting">connecting</span>
+      </div>
+    </div>
+
+    <div class="headline">
+      <div class="step-readout">
+        <div class="step-line">
+          <span id="step-now" class="step-now">------</span>
+          <span class="step-of">/ <span id="step-max">------</span></span>
+        </div>
+        <div class="step-caption">
+          <span>step</span>
+          <span id="epoch-line">epoch —</span>
+        </div>
+      </div>
+      <dl class="head-meta">
+        <div><dt>eta</dt><dd id="eta">—</dd></div>
+        <div><dt>last log</dt><dd id="last-log">—</dd></div>
+        <div><dt>refresh</dt><dd id="refresh">5s</dd></div>
+        <div><dt>logs</dt><dd id="log-count">0</dd></div>
+      </dl>
+    </div>
+
+    <div class="tape" aria-hidden="true">
+      <div class="tape-meta">
+        <span id="tape-label">loss tape</span>
+        <span id="tape-range">no rows</span>
+      </div>
+      <div class="tape-strip" id="tape"></div>
+    </div>
+  </header>
+
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+  <main id="main">
+    <section id="empty" class="empty" hidden>
+      <p class="eyebrow">No runs found</p>
+      <h2>Point the telemetry sheet at a run that is logging.</h2>
+      <p>
+        The dashboard looks for <code>metrics.csv</code> under <code id="root-path">runs</code>.
+        Start a training run, then this page picks it up on the next refresh.
+      </p>
+      <pre class="command">moss-lora-train --config configs/train_5090_1m.yaml</pre>
+      <p class="hint">Default output: runs/moss_1m · samples and checkpoints appear as they are written</p>
+    </section>
+
+    <div id="view" hidden>
+      <section class="stats" aria-label="Latest logged metrics">
+        <dl class="stat loss"><dt>loss</dt><dd id="stat-loss">—</dd></dl>
+        <dl class="stat"><dt>ema 20</dt><dd id="stat-ema">—</dd></dl>
+        <dl class="stat lr"><dt>lr</dt><dd id="stat-lr">—</dd></dl>
+        <dl class="stat"><dt>sigma</dt><dd id="stat-sigma">—</dd></dl>
+        <dl class="stat"><dt>grad norm</dt><dd id="stat-grad">—</dd></dl>
+        <dl class="stat"><dt>s / step</dt><dd id="stat-sps">—</dd></dl>
+        <dl class="stat"><dt>peak vram</dt><dd id="stat-vram">—<span class="unit">GB</span></dd></dl>
+      </section>
+
+      <section class="plots" aria-label="Training curves">
+        <figure class="fig">
+          <figcaption class="fig-head">
+            <h2 class="fig-title">Loss</h2>
+            <span class="legend">
+              <span><i class="swatch" aria-hidden="true"></i>raw</span>
+              <span><i class="swatch ema" aria-hidden="true"></i>ema 20</span>
+            </span>
+          </figcaption>
+          <div class="chart-wrap">
+            <svg id="loss-chart" class="chart" role="img" aria-label="Loss chart"></svg>
+            <div id="loss-tip" class="tip" aria-hidden="true"></div>
+          </div>
+        </figure>
+        <figure class="fig fig-lr">
+          <figcaption class="fig-head">
+            <h2 class="fig-title">Learning rate</h2>
+            <span class="legend"><span><i class="swatch lr" aria-hidden="true"></i>lr</span></span>
+          </figcaption>
+          <div class="chart-wrap">
+            <svg id="lr-chart" class="chart" role="img" aria-label="Learning rate chart"></svg>
+            <div id="lr-tip" class="tip" aria-hidden="true"></div>
+          </div>
+        </figure>
+      </section>
+
+      <div class="columns">
+        <section class="samples" aria-labelledby="samples-title">
+          <div class="section-head">
+            <h2 id="samples-title">Samples</h2>
+            <span id="samples-note" class="section-note"></span>
+          </div>
+          <div id="sample-tabs" class="tabs" role="group" aria-label="Sample steps"></div>
+          <div id="contact-sheet" class="contact"></div>
+          <p id="samples-empty" class="quiet" hidden></p>
+        </section>
+
+        <aside class="side">
+          <section aria-labelledby="checkpoints-title">
+            <div class="section-head">
+              <h2 id="checkpoints-title">Checkpoints</h2>
+              <span id="checkpoints-note" class="section-note"></span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th scope="col">step</th><th scope="col">adapter</th><th scope="col">optimizer</th><th scope="col">written</th></tr>
+                </thead>
+                <tbody id="checkpoints-body"></tbody>
+              </table>
+            </div>
+            <p id="checkpoints-empty" class="quiet" hidden>No checkpoints yet.</p>
+          </section>
+
+          <section aria-labelledby="config-title">
+            <div class="section-head">
+              <h2 id="config-title">Configuration</h2>
+              <span id="config-note" class="section-note">trainer_state.json</span>
+            </div>
+            <dl id="config" class="config"></dl>
+            <p id="config-empty" class="quiet" hidden>Configuration appears after the first checkpoint.</p>
+          </section>
+        </aside>
+      </div>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <span>read-only · weights are never served</span>
+    <span id="foot-run"></span>
+  </footer>
+</div>
+
+<dialog id="lightbox" class="lightbox" aria-labelledby="lightbox-cap">
+  <form method="dialog"><button class="lightbox-close" aria-label="Close preview">×</button></form>
+  <figure>
+    <img id="lightbox-img" alt="">
+    <figcaption id="lightbox-cap"></figcaption>
+  </figure>
+</dialog>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  };
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const svgEl = (tag, attrs) => {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const key in attrs) node.setAttribute(key, attrs[key]);
+    return node;
+  };
+
+  const els = {
+    rootPath: $("root-path"),
+    runSelect: $("run-select"),
+    statusBadge: $("status-badge"),
+    statusText: $("status-text"),
+    conn: $("conn"),
+    stepNow: $("step-now"),
+    stepMax: $("step-max"),
+    epochLine: $("epoch-line"),
+    eta: $("eta"),
+    lastLog: $("last-log"),
+    refresh: $("refresh"),
+    logCount: $("log-count"),
+    tape: $("tape"),
+    tapeLabel: $("tape-label"),
+    tapeRange: $("tape-range"),
+    notice: $("notice"),
+    empty: $("empty"),
+    view: $("view"),
+    statLoss: $("stat-loss"),
+    statEma: $("stat-ema"),
+    statLr: $("stat-lr"),
+    statSigma: $("stat-sigma"),
+    statGrad: $("stat-grad"),
+    statSps: $("stat-sps"),
+    statVram: $("stat-vram"),
+    lossChart: $("loss-chart"),
+    lrChart: $("lr-chart"),
+    lossTip: $("loss-tip"),
+    lrTip: $("lr-tip"),
+    sampleTabs: $("sample-tabs"),
+    contact: $("contact-sheet"),
+    samplesNote: $("samples-note"),
+    samplesEmpty: $("samples-empty"),
+    checkpointsBody: $("checkpoints-body"),
+    checkpointsNote: $("checkpoints-note"),
+    checkpointsEmpty: $("checkpoints-empty"),
+    config: $("config"),
+    configEmpty: $("config-empty"),
+    configNote: $("config-note"),
+    footRun: $("foot-run"),
+    lightbox: $("lightbox"),
+    lightboxImg: $("lightbox-img"),
+    lightboxCap: $("lightbox-cap"),
+  };
+
+  const state = {
+    runId: null,
+    queryRun: new URLSearchParams(location.search).get("run"),
+    runs: [],
+    detail: null,
+    refreshMs: 5000,
+    selectedSampleStep: null,
+    busy: false,
+    timer: null,
+    failures: 0,
+    sampleSignature: "",
+    checkpointSignature: "",
+    configSignature: "",
+    runOptionsSignature: "",
+    root: "runs",
+  };
+
+  const STATUS_LABEL = { running: "running", finished: "finished", stale: "stale", unknown: "no logs" };
+
+  function fmtNum(value, digits = 4) {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
+    return Number(value).toFixed(digits);
+  }
+
+  function fmtLr(value) {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
+    return Number(value).toExponential(2);
+  }
+
+  function fmtInt(value) {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
+    return new Intl.NumberFormat("en-US").format(Number(value));
+  }
+
+  function padStep(value) {
+    if (value === null || value === undefined) return "------";
+    return String(value).padStart(6, "0");
+  }
+
+  function fmtDuration(seconds) {
+    if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return "—";
+    let total = Math.max(0, Math.round(Number(seconds)));
+    if (total < 60) return `${total}s`;
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor((total % 86400) / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    if (days) return `${days}d ${hours}h`;
+    if (hours) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+    return `${minutes}m`;
+  }
+
+  function fmtAgo(iso) {
+    if (!iso) return "—";
+    const then = Date.parse(iso);
+    if (!Number.isFinite(then)) return "—";
+    const seconds = Math.max(0, (Date.now() - then) / 1000);
+    if (seconds < 60) return `${Math.round(seconds)}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+  }
+
+  function fmtShortStep(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "";
+    if (Math.abs(number) >= 10000) return `${(number / 1000).toFixed(number % 1000 === 0 ? 0 : 1)}k`;
+    return String(Math.round(number));
+  }
+
+  function fmtWhen(iso) {
+    if (!iso) return "—";
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleString("en-GB", {
+      day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+  }
+
+  function setStat(node, text, unit) {
+    node.replaceChildren(document.createTextNode(text));
+    if (unit) node.append(el("span", "unit", unit));
+  }
+
+  function setText(node, text, title) {
+    node.textContent = text;
+    if (title !== undefined) {
+      if (title) node.title = title;
+      else node.removeAttribute("title");
+    }
+  }
+
+  function setConn(mode, text) {
+    els.conn.dataset.state = mode;
+    els.conn.textContent = text;
+  }
+
+  function showNotice(message) {
+    els.notice.textContent = message;
+    els.notice.hidden = false;
+  }
+
+  function setBadge(status) {
+    const key = STATUS_LABEL[status] ? status : "unknown";
+    els.statusBadge.dataset.status = key;
+    els.statusText.textContent = STATUS_LABEL[key];
+  }
+
+  async function getJson(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(url, {
+        cache: "no-store",
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+      let payload = null;
+      try { payload = await response.json(); } catch (error) { payload = null; }
+      if (!response.ok) {
+        const message = payload && payload.error ? payload.error : `HTTP ${response.status}`;
+        const failure = new Error(message);
+        failure.status = response.status;
+        throw failure;
+      }
+      return payload;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // ---------------------------------------------------------------- run list
+
+  function runLabel(run) {
+    const step = run.step === null || run.step === undefined ? "—" : padStep(run.step).replace(/^0+/, "") || "0";
+    const max = run.max_steps === null || run.max_steps === undefined ? "—" : run.max_steps;
+    const labelName = run.id === "." ? run.name : run.id;
+    return `${labelName} · ${step}/${max}`;
+  }
+
+  function applyRuns(payload) {
+    state.root = payload.root || state.root;
+    els.rootPath.textContent = state.root;
+    state.runs = Array.isArray(payload.runs) ? payload.runs : [];
+    const ids = state.runs.map((run) => run.id);
+
+    if (state.runId && !ids.includes(state.runId)) {
+      state.runId = null;
+      state.selectedSampleStep = null;
+      state.detail = null;
+      resetSignatures();
+    }
+    if (!state.runId && ids.length) {
+      state.runId = ids.includes(state.queryRun) ? state.queryRun : ids[0];
+      updateUrl();
+    }
+    if (!state.runId) {
+      showEmpty();
+      return;
+    }
+
+    const signature = ids.join("\u0000");
+    if (signature !== state.runOptionsSignature) {
+      state.runOptionsSignature = signature;
+      els.runSelect.replaceChildren();
+      for (const run of state.runs) {
+        const option = el("option", null, runLabel(run));
+        option.value = run.id;
+        els.runSelect.append(option);
+      }
+    } else {
+      const byId = new Map(state.runs.map((run) => [run.id, run]));
+      for (const option of els.runSelect.options) {
+        const run = byId.get(option.value);
+        if (run) option.textContent = runLabel(run);
+      }
+    }
+    els.runSelect.value = state.runId;
+    els.runSelect.disabled = false;
+    showView();
+  }
+
+  function showEmpty() {
+    els.empty.hidden = false;
+    els.view.hidden = true;
+    els.footRun.textContent = "";
+    els.runSelect.disabled = true;
+    els.runSelect.replaceChildren();
+    state.runOptionsSignature = "";
+    setBadge("unknown");
+    setText(els.stepNow, "------");
+    setText(els.stepMax, "------");
+  }
+
+  function showView() {
+    els.empty.hidden = true;
+    els.view.hidden = false;
+  }
+
+  function updateUrl() {
+    const params = new URLSearchParams(location.search);
+    if (state.runId) params.set("run", state.runId);
+    else params.delete("run");
+    const query = params.toString();
+    history.replaceState(null, "", location.pathname + (query ? `?${query}` : "") + location.hash);
+  }
+
+  function resetSignatures() {
+    state.sampleSignature = "";
+    state.checkpointSignature = "";
+    state.configSignature = "";
+  }
+
+  // ---------------------------------------------------------------- detail
+
+  function applyDetail(detail) {
+    state.detail = detail;
+    if (Number.isFinite(Number(detail.refresh_seconds))) {
+      state.refreshMs = Math.max(1000, Number(detail.refresh_seconds) * 1000);
+    }
+
+    setBadge(detail.status);
+    els.statusBadge.title = `Run status · last log ${fmtAgo(detail.updated_at)}`;
+    setText(els.stepNow, padStep(detail.step));
+    setText(els.stepMax, padStep(detail.max_steps));
+    const epoch = detail.epoch === null || detail.epoch === undefined ? "—" : detail.epoch;
+    const batch = detail.batch_index === null || detail.batch_index === undefined ? null : detail.batch_index;
+    setText(els.epochLine, batch === null ? `epoch ${epoch}` : `epoch ${epoch} · batch ${batch}`);
+    setText(els.eta, fmtDuration(detail.eta_seconds), detail.eta_at ? `finishes around ${detail.eta_at}` : "");
+    setText(els.lastLog, fmtAgo(detail.updated_at), detail.updated_at || "");
+    const refreshSeconds = state.refreshMs / 1000;
+    setText(els.refresh, `${refreshSeconds % 1 === 0 ? refreshSeconds.toFixed(0) : refreshSeconds.toFixed(1)}s`);
+    const metricCount = detail.counts && detail.counts.metrics !== undefined ? detail.counts.metrics : detail.metrics.length;
+    setText(els.logCount, fmtInt(metricCount));
+    els.footRun.textContent = detail.id === "." ? detail.name : detail.id;
+
+    const stats = detail.stats || {};
+    setStat(els.statLoss, fmtNum(stats.loss, 4));
+    setStat(els.statEma, fmtNum(stats.loss_ema, 4));
+    setStat(els.statLr, fmtLr(stats.lr));
+    setStat(els.statSigma, fmtNum(stats.sigma, 3));
+    setStat(els.statGrad, fmtNum(stats.grad_norm, 3));
+    setStat(els.statSps, fmtNum(stats.sec_per_step, 3));
+    setStat(els.statVram, fmtNum(stats.peak_vram_gb, 2), "GB");
+
+    drawTape(detail.metrics, detail.status);
+    drawLoss(detail.metrics, detail.stats || {});
+    drawLr(detail.metrics, detail.stats || {});
+    renderSamples(detail);
+    renderCheckpoints(detail);
+    renderConfig(detail);
+  }
+
+  // ---------------------------------------------------------------- tape
+
+  const OLIVE = [143, 164, 0];
+  const AMBER = [185, 119, 14];
+  const VERMILION = [197, 59, 44];
+
+  function mix(a, b, t) {
+    const value = Math.max(0, Math.min(1, t));
+    return `rgb(${Math.round(a[0] + (b[0] - a[0]) * value)},`
+      + `${Math.round(a[1] + (b[1] - a[1]) * value)},`
+      + `${Math.round(a[2] + (b[2] - a[2]) * value)})`;
+  }
+
+  function lossColor(t) {
+    return t < 0.5 ? mix(OLIVE, AMBER, t * 2) : mix(AMBER, VERMILION, (t - 0.5) * 2);
+  }
+
+  function drawTape(rows, status) {
+    const recent = rows.slice(-80);
+    const losses = recent.map((row) => row.loss).filter((value) => value !== null && Number.isFinite(value));
+    els.tape.replaceChildren();
+    setText(els.tapeLabel, recent.length
+      ? `loss tape · latest ${recent.length} log${recent.length === 1 ? "" : "s"}`
+      : "loss tape · no logs");
+    if (!losses.length) {
+      setText(els.tapeRange, "no rows");
+      return;
+    }
+    const sorted = [...losses].sort((a, b) => a - b);
+    const low = sorted[Math.floor(sorted.length * 0.05)];
+    const high = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
+    const span = high - low;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const row of recent) {
+      const value = row.loss;
+      let height = 2;
+      let color = "var(--muted)";
+      if (value !== null && Number.isFinite(value)) {
+        const t = span > 1e-12 ? (value - low) / span : 0.5;
+        const norm = Math.max(0, Math.min(1, t));
+        height = 5 + norm * 49;
+        color = lossColor(norm);
+        min = Math.min(min, value);
+        max = Math.max(max, value);
+      }
+      const tick = el("i");
+      tick.style.height = `${height.toFixed(1)}px`;
+      tick.style.background = color;
+      tick.title = `step ${row.step} · loss ${fmtNum(row.loss, 4)}`;
+      els.tape.append(tick);
+    }
+    if (status === "running" && els.tape.lastElementChild) {
+      els.tape.lastElementChild.classList.add("live");
+    }
+    setText(els.tapeRange, Number.isFinite(min) ? `${fmtNum(min, 3)} – ${fmtNum(max, 3)}` : "no loss");
+  }
+
+  // ---------------------------------------------------------------- charts
+
+  function niceTicks(min, max, count) {
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) {
+      const base = Number.isFinite(min) ? min : 0;
+      const delta = Math.abs(base) * 0.1 || 1;
+      return [base - delta, base, base + delta];
+    }
+    const raw = (max - min) / Math.max(1, count);
+    const magnitude = Math.pow(10, Math.floor(Math.log10(raw)));
+    const normalized = raw / magnitude;
+    const baseStep = magnitude * (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 :
+      normalized <= 5 ? 5 : 10);
+    for (const divisor of [1, 2, 4]) {
+      const step = baseStep / divisor;
+      const start = Math.ceil(min / step) * step;
+      const end = Math.floor(max / step) * step;
+      const ticks = [];
+      for (let value = start; value <= end + step * 0.001; value += step) {
+        ticks.push(Number(value.toPrecision(12)));
+      }
+      if (ticks.length >= 3) return ticks;
+    }
+    return [0, 1, 2, 3].map((index) => Number((min + ((max - min) * index) / 3).toPrecision(12)));
+  }
+
+  function createPlot(svg, tip, spec) {
+    const plot = { rows: [], geom: null, spec };
+    const hide = () => {
+      tip.style.display = "none";
+      const cross = svg.querySelector(".cross");
+      if (cross) cross.remove();
+      svg.querySelectorAll(".hover-dot").forEach((dot) => dot.remove());
+    };
+
+    svg.addEventListener("pointermove", (event) => {
+      if (!plot.geom || !plot.rows.length) return;
+      const rect = svg.getBoundingClientRect();
+      const { left, plotW, xmin, xmax, y, width, series } = plot.geom;
+      const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * width;
+      const ratio = Math.max(0, Math.min(1, (px - left) / plotW));
+      const target = xmin + ratio * (xmax - xmin);
+      let nearest = plot.rows[0];
+      let best = Infinity;
+      for (const row of plot.rows) {
+        const distance = Math.abs(row.step - target);
+        if (distance < best) { best = distance; nearest = row; }
+      }
+      const cx = left + (nearest.step - xmin) / (xmax - xmin || 1) * plotW;
+
+      hide();
+      svg.append(svgEl("line", { class: "cross", x1: cx, x2: cx, y1: plot.geom.top, y2: plot.geom.top + plot.geom.plotH }));
+
+      let anchorY = plot.geom.top + plot.geom.plotH;
+      const lines = [`STEP ${nearest.step}`];
+      for (const item of series) {
+        const value = nearest[item.field];
+        if (value === null || value === undefined || !Number.isFinite(value)) continue;
+        const cy = y(value);
+        anchorY = Math.min(anchorY, cy);
+        const dot = svgEl("circle", { class: `${item.dotClass || "dot"} hover-dot`, cx, cy, r: 3 });
+        svg.append(dot);
+        lines.push(`${item.label} ${item.format(value)}`);
+      }
+      tip.textContent = lines.join("\n");
+      tip.style.display = "block";
+      const cssX = (cx / Math.max(1, width)) * rect.width;
+      const cssY = (anchorY / Math.max(1, plot.geom.height)) * rect.height;
+      tip.style.left = `${Math.max(58, Math.min(rect.width - 58, cssX))}px`;
+      tip.style.top = `${Math.max(26, cssY)}px`;
+    });
+    svg.addEventListener("pointerleave", hide);
+    return plot;
+  }
+
+  function drawPlot(plot, rows) {
+    const spec = plot.spec;
+    const svg = spec.svg;
+    const tip = spec.tip;
+    plot.rows = rows;
+    const width = Math.max(300, Math.round(svg.clientWidth || 800));
+    const height = Math.max(110, Math.round(svg.clientHeight || 220));
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.replaceChildren();
+
+    const pad = { top: 18, right: 16, bottom: 21, left: 50 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+
+    const values = [];
+    for (const row of rows) {
+      for (const item of spec.series) {
+        const value = row[item.field];
+        if (value !== null && value !== undefined && Number.isFinite(value)) values.push(value);
+      }
+    }
+
+    if (!values.length) {
+      const empty = svgEl("text", {
+        class: "empty", x: width / 2, y: height / 2,
+        "text-anchor": "middle", "dominant-baseline": "middle",
+      });
+      empty.textContent = spec.emptyLabel;
+      svg.append(empty);
+      svg.setAttribute("aria-label", `${spec.title} chart. No data yet.`);
+      tip.style.display = "none";
+      plot.geom = null;
+      return;
+    }
+
+    let dataMin = Math.min(...values);
+    let dataMax = Math.max(...values);
+    if (dataMin === dataMax) {
+      const delta = Math.abs(dataMin) * 0.08 || 0.5;
+      dataMin -= delta;
+      dataMax += delta;
+    }
+    const padding = (dataMax - dataMin) * 0.08;
+    let ymin = dataMin - padding;
+    let ymax = dataMax + padding;
+    let yTicks = niceTicks(ymin, ymax, 5);
+    const domain = ymax - ymin;
+    const tickStep = yTicks.length > 1 ? yTicks[1] - yTicks[0] : 0;
+    if (tickStep) {
+      const previous = yTicks[0] - tickStep;
+      const next = yTicks[yTicks.length - 1] + tickStep;
+      if (ymin - previous <= domain * 0.05) {
+        ymin = previous;
+        yTicks = [previous, ...yTicks];
+      }
+      if (next - ymax <= domain * 0.05) {
+        ymax = next;
+        yTicks = [...yTicks, next];
+      }
+    }
+
+    const firstStep = rows[0].step;
+    const lastStep = rows[rows.length - 1].step;
+    let xmin = firstStep;
+    let xmax = lastStep;
+    if (xmin === xmax) { xmin -= 1; xmax += 1; }
+    const xTicks = niceTicks(xmin, xmax, 5)
+      .filter((value) => value >= xmin && value <= xmax && Number.isFinite(value))
+      .map((value) => Math.round(value))
+      .filter((value, index, array) => array.indexOf(value) === index);
+
+    const x = (value) => pad.left + ((value - xmin) / (xmax - xmin)) * plotW;
+    const y = (value) => pad.top + (1 - (value - ymin) / (ymax - ymin)) * plotH;
+
+    for (const tick of yTicks) {
+      if (tick < ymin || tick > ymax) continue;
+      const cy = y(tick);
+      svg.append(svgEl("line", { class: "grid", x1: pad.left, x2: pad.left + plotW, y1: cy, y2: cy }));
+      const label = svgEl("text", {
+        x: pad.left - 8, y: cy + 3, "text-anchor": "end",
+      });
+      label.textContent = spec.yFormat(tick);
+      svg.append(label);
+    }
+
+    for (const tick of xTicks) {
+      const cx = x(tick);
+      svg.append(svgEl("line", { class: "grid", x1: cx, x2: cx, y1: pad.top, y2: pad.top + plotH }));
+      const label = svgEl("text", {
+        x: cx, y: pad.top + plotH + 15, "text-anchor": "middle",
+      });
+      label.textContent = fmtShortStep(tick);
+      svg.append(label);
+    }
+
+    svg.append(svgEl("line", {
+      class: "axis", x1: pad.left, x2: pad.left + plotW, y1: pad.top + plotH, y2: pad.top + plotH,
+    }));
+
+    for (const item of spec.series) {
+      let path = "";
+      let open = false;
+      let last = null;
+      for (const row of rows) {
+        const value = row[item.field];
+        if (value === null || value === undefined || !Number.isFinite(value)) {
+          open = false;
+          continue;
+        }
+        const cx = x(row.step);
+        const cy = y(value);
+        path += `${open ? "L" : "M"}${cx.toFixed(2)} ${cy.toFixed(2)}`;
+        open = true;
+        last = { cx, cy };
+      }
+      if (path) {
+        svg.append(svgEl("path", { class: item.className, d: path }));
+      }
+      if (last && rows.length === 1) {
+        svg.append(svgEl("circle", { class: item.dotClass || "dot", cx: last.cx, cy: last.cy, r: 3 }));
+      }
+    }
+
+    plot.geom = {
+      left: pad.left, top: pad.top, plotW, plotH, xmin, xmax, width, height,
+      y, series: spec.series,
+    };
+
+    const summary = spec.aria(rows);
+    svg.setAttribute("aria-label", summary);
+  }
+
+  const lossPlot = createPlot(els.lossChart, els.lossTip, {
+    svg: els.lossChart,
+    tip: els.lossTip,
+    title: "Loss",
+    emptyLabel: "no loss rows yet",
+    yFormat: (value) => value.toFixed(2),
+    series: [
+      { field: "loss", label: "LOSS", className: "raw", dotClass: "dot", format: (value) => fmtNum(value, 4) },
+      { field: "loss_ema", label: "EMA", className: "ema", dotClass: "dot", format: (value) => fmtNum(value, 4) },
+    ],
+    aria: (rows) => {
+      const last = rows[rows.length - 1] || {};
+      return `Loss chart over ${rows.length} points. Latest loss ${fmtNum(last.loss, 4)}, EMA ${fmtNum(last.loss_ema, 4)}.`;
+    },
+  });
+
+  const lrPlot = createPlot(els.lrChart, els.lrTip, {
+    svg: els.lrChart,
+    tip: els.lrTip,
+    title: "Learning rate",
+    emptyLabel: "no lr rows yet",
+    yFormat: (value) => (value === 0 ? "0" : Math.abs(value) >= 0.001 ? value.toFixed(4) : value.toExponential(1)),
+    series: [
+      { field: "lr", label: "LR", className: "lrs", dotClass: "dot lr", format: (value) => fmtLr(value) },
+    ],
+    aria: (rows) => {
+      const last = rows[rows.length - 1] || {};
+      return `Learning rate chart over ${rows.length} points. Latest ${fmtLr(last.lr)}.`;
+    },
+  });
+
+  function drawLoss(rows, stats) {
+    drawPlot(lossPlot, rows || []);
+    if (stats && stats.loss !== undefined) {
+      els.lossChart.setAttribute(
+        "aria-label",
+        `Loss chart over ${(rows || []).length} plotted points. Latest loss ${fmtNum(stats.loss, 4)}, EMA ${fmtNum(stats.loss_ema, 4)}.`
+      );
+    }
+  }
+
+  function drawLr(rows, stats) {
+    drawPlot(lrPlot, rows || []);
+    if (stats && stats.lr !== undefined) {
+      els.lrChart.setAttribute(
+        "aria-label",
+        `Learning rate chart over ${(rows || []).length} plotted points. Latest ${fmtLr(stats.lr)}.`
+      );
+    }
+  }
+
+  let resizeFrame = null;
+  const resizeObserver = new ResizeObserver(() => {
+    if (!state.detail || resizeFrame) return;
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = null;
+      if (!state.detail) return;
+      drawPlot(lossPlot, state.detail.metrics || []);
+      drawPlot(lrPlot, state.detail.metrics || []);
+    });
+  });
+  resizeObserver.observe(els.lossChart);
+  resizeObserver.observe(els.lrChart);
+
+  // ---------------------------------------------------------------- samples
+
+  function renderSamples(detail) {
+    const groups = Array.isArray(detail.samples) ? detail.samples : [];
+    const steps = groups.map((group) => group.step);
+    if (!steps.includes(state.selectedSampleStep)) {
+      state.selectedSampleStep = steps.length ? steps[0] : null;
+    }
+    const signature = JSON.stringify(groups.map((group) => [
+      group.step,
+      group.items.map((item) => [item.name, item.size, item.mtime]),
+    ]));
+    const count = groups.reduce((total, group) => total + group.items.length, 0);
+    els.samplesNote.textContent = count ? `${groups.length} steps · ${count} files` : "";
+    els.samplesEmpty.hidden = count > 0;
+
+    if (signature !== state.sampleSignature) {
+      state.sampleSignature = signature;
+      renderTabs(groups);
+      renderSheet(groups);
+    }
+    if (!count) {
+      const sampleEvery = detail.config && detail.config.sample_every;
+      els.samplesEmpty.textContent = sampleEvery === 0
+        ? "Sampling is off for this run (logging.sample_every: 0)."
+        : "Validation samples appear here after the first sampling step.";
+      els.sampleTabs.replaceChildren();
+      els.contact.replaceChildren();
+    }
+  }
+
+  function renderTabs(groups) {
+    els.sampleTabs.replaceChildren();
+    if (!groups.length) return;
+    for (const group of groups) {
+      const button = el("button", null, `S${padStep(group.step)}`);
+      button.type = "button";
+      button.setAttribute("aria-pressed", group.step === state.selectedSampleStep ? "true" : "false");
+      button.title = `${group.items.length} files at step ${group.step}`;
+      button.addEventListener("click", () => {
+        state.selectedSampleStep = group.step;
+        for (const other of els.sampleTabs.children) {
+          other.setAttribute("aria-pressed", other === button ? "true" : "false");
+        }
+        renderSheet(groups);
+      });
+      els.sampleTabs.append(button);
+    }
+  }
+
+  function renderSheet(groups) {
+    els.contact.replaceChildren();
+    const group = groups.find((entry) => entry.step === state.selectedSampleStep) || groups[0];
+    if (!group) return;
+    group.items.forEach((item, index) => {
+      const stamp = `S${padStep(group.step)}`;
+      const idx = String(index + 1).padStart(2, "0");
+      if (item.type === "image" && item.url) {
+        const tile = el("button", "tile");
+        tile.type = "button";
+        tile.setAttribute("aria-label", `Open ${item.name} from step ${group.step}`);
+        const image = el("img");
+        image.src = item.url;
+        image.alt = `${item.name}, step ${group.step}`;
+        image.loading = "lazy";
+        image.decoding = "async";
+        tile.append(image);
+        tile.append(el("span", "stamp", stamp));
+        tile.append(el("span", "idx", idx));
+        tile.addEventListener("click", () => openLightbox(
+          item.url,
+          `${item.name} · ${stamp} · ${fmtBytes(item.size)}`
+        ));
+        els.contact.append(tile);
+      } else {
+        const tile = el("div", "tile latent");
+        tile.setAttribute("role", "img");
+        tile.setAttribute("aria-label", `Latent ${item.name} from step ${group.step}`);
+        const mark = el("span", "latent-mark");
+        mark.append(document.createTextNode("latent"));
+        mark.append(el("small", null, item.name));
+        tile.append(mark);
+        tile.append(el("span", "stamp", stamp));
+        tile.append(el("span", "idx", idx));
+        els.contact.append(tile);
+      }
+    });
+  }
+
+  function fmtBytes(size) {
+    if (size === null || size === undefined || !Number.isFinite(Number(size))) return "—";
+    const value = Number(size);
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+    if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+
+  function openLightbox(url, caption) {
+    els.lightboxImg.src = url;
+    els.lightboxImg.alt = caption;
+    els.lightboxCap.textContent = caption;
+    els.lightboxImg.onerror = () => {
+      els.lightboxCap.textContent = "Preview could not be loaded. Refresh to retry.";
+    };
+    if (typeof els.lightbox.showModal === "function") els.lightbox.showModal();
+    else els.lightbox.setAttribute("open", "");
+  }
+
+  els.lightbox.addEventListener("click", (event) => {
+    if (event.target === els.lightbox) els.lightbox.close();
+  });
+
+  // ---------------------------------------------------------------- checkpoints
+
+  function renderCheckpoints(detail) {
+    const entries = Array.isArray(detail.checkpoints) ? detail.checkpoints : [];
+    const signature = JSON.stringify(entries.map((entry) => [
+      entry.step, entry.adapter_bytes, entry.optimizer_bytes, entry.mtime,
+    ]));
+    const saveEvery = detail.config && detail.config.save_every;
+    els.checkpointsNote.textContent = saveEvery ? `every ${saveEvery} steps` : "";
+    els.checkpointsEmpty.hidden = entries.length > 0;
+    if (signature === state.checkpointSignature) return;
+    state.checkpointSignature = signature;
+    els.checkpointsBody.replaceChildren();
+    if (!entries.length) {
+      els.checkpointsEmpty.textContent = saveEvery
+        ? `No checkpoints yet. The trainer saves every ${saveEvery} steps.`
+        : "No checkpoints yet.";
+      return;
+    }
+    for (const entry of entries) {
+      const row = el("tr");
+      row.append(el("td", null, padStep(entry.step)));
+      row.append(el("td", null, entry.adapter_size || fmtBytes(entry.adapter_bytes)));
+      row.append(el("td", null, entry.optimizer_size || fmtBytes(entry.optimizer_bytes)));
+      const written = el("td", null, fmtWhen(entry.mtime));
+      if (entry.mtime) written.title = entry.mtime;
+      row.append(written);
+      els.checkpointsBody.append(row);
+    }
+  }
+
+  // ---------------------------------------------------------------- config
+
+  function renderConfig(detail) {
+    const config = detail.config || {};
+    const entries = [
+      ["rank / alpha", `${config.rank ?? "—"} / ${config.alpha ?? "—"}`],
+      ["learning rate", fmtLr(config.learning_rate)],
+      ["batch", config.batch_size ?? "—"],
+      ["max steps", config.max_steps ?? "—"],
+      ["cache dir", config.cache_dir || "—"],
+      ["base model", config.base_model || "—"],
+      ["schedule", config.lr_scheduler || "—"],
+      ["targets", Array.isArray(config.targets) && config.targets.length ? config.targets.join(" · ") : "—"],
+    ];
+    const signature = JSON.stringify(entries);
+    els.configEmpty.hidden = Boolean(config.rank || config.learning_rate || config.base_model);
+    els.configNote.textContent = (config.rank || config.learning_rate || config.base_model)
+      ? "trainer_state.json"
+      : "no state yet";
+    if (signature === state.configSignature) return;
+    state.configSignature = signature;
+    els.config.replaceChildren();
+    for (const [label, value] of entries) {
+      const cell = el("div", label === "targets" ? "wide" : null);
+      cell.append(el("dt", null, label));
+      const dd = el("dd", null, String(value));
+      cell.append(dd);
+      els.config.append(cell);
+    }
+  }
+
+  // ---------------------------------------------------------------- polling
+
+  async function tick() {
+    if (state.busy) return;
+    if (document.hidden) { schedule(); return; }
+    state.busy = true;
+    try {
+      const payload = await getJson("/api/runs");
+      applyRuns(payload);
+      if (!state.runId) {
+        setConn("live", "feed ok");
+        state.failures = 0;
+        return;
+      }
+      let detail;
+      try {
+        detail = await getJson(`/api/run?path=${encodeURIComponent(state.runId)}`);
+      } catch (error) {
+        if (error.status === 404) {
+          state.runId = null;
+          state.selectedSampleStep = null;
+          state.detail = null;
+          state.runOptionsSignature = "";
+          resetSignatures();
+          updateUrl();
+          throw error;
+        }
+        throw error;
+      }
+      applyDetail(detail);
+      setConn("live", "feed ok");
+      els.notice.hidden = true;
+      state.failures = 0;
+    } catch (error) {
+      state.failures += 1;
+      setConn("offline", "feed lost · retrying");
+      showNotice(`Telemetry unavailable — ${error.message}. Retrying; the last good data stays on screen.`);
+    } finally {
+      state.busy = false;
+      schedule();
+    }
+  }
+
+  function schedule() {
+    clearTimeout(state.timer);
+    state.timer = setTimeout(tick, Math.max(1000, state.refreshMs));
+  }
+
+  function refreshNow() {
+    clearTimeout(state.timer);
+    if (!state.busy) tick();
+  }
+
+  els.runSelect.addEventListener("change", () => {
+    const next = els.runSelect.value || null;
+    if (next === state.runId) return;
+    state.runId = next;
+    state.selectedSampleStep = null;
+    state.detail = null;
+    resetSignatures();
+    updateUrl();
+    refreshNow();
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshNow();
+  });
+
+  tick();
+})();
+</script>
+</body>
+</html>

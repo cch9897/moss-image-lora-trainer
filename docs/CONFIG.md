@@ -146,6 +146,15 @@ runs/moss_1m/
 
 `metrics.csv` 按 `log_every` 追加 step、loss、lr、step time 等字段；`trainer_state.json` 记录全局步数与数据顺序状态。
 
+训练期间可以启动只读看板，观察 loss/EMA、学习率、采样图、checkpoint 与 ETA（不会写入 run，也不会提供权重下载）：
+
+```bash
+pip install -e '.[dashboard]'
+moss-lora-dashboard --root runs --port 7860
+```
+
+看板优先读取 run 根目录的 `trainer_state.json`，不存在时自动回退到最新 checkpoint 内的副本；`adapter_config.json` 同理。完整用法、API、安全边界与 SSH 端口转发见 [DASHBOARD.md](DASHBOARD.md)。
+
 恢复训练：
 
 ```bash
