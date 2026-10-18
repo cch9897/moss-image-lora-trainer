@@ -1,0 +1,26 @@
+MOSS-LORA
+=========
+
+This repository includes vendored third-party code:
+
+  moss_lora/model/moss_image.py
+    Source:    https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/resolve/main/pipeline_moss_image.py
+               (also shipped in the OpenMOSS/MOSS-Image repository)
+    Revision:  1ceede80badddd6a7812069619edaa5633587192 (model repo state, 2026-10-16)
+    License:   Apache-2.0 (upstream repository LICENSE)
+    Changes:   documented in the file header: Apache-2.0/provenance comment,
+               `import torch.utils.checkpoint`, `gradient_checkpointing` flag plus
+               enable/disable methods on MOSSImageTransformer, checkpointed main-block
+               loop, and the transformers import moved into
+               MOSSImagePipeline.from_components_pretrained so the module imports with
+               only torch and diffusers. No math, module structure, state-dict keys,
+               scheduler, or pipeline behavior was modified; a unit test diffs the file
+               against upstream and allows only these changes.
+
+The MOSS-Image-Base model weights, tokenizer and text encoder are distributed by
+OpenMOSS-Team under the license shipped with that repository; this project neither
+includes nor redistributes them. Point `model.path` at your local checkout (for
+example models/MOSS-Image-Base) or a Hub id with `model.local_files_only` set
+appropriately.
+
+Everything else in this repository is Apache-2.0 licensed (see LICENSE).

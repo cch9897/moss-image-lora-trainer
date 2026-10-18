@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+*.egg
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Model weights, datasets and generated training artifacts
+models/
+cache/
+outputs/
+runs/
+data/
+datasets/
+dataset/
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.ckpt
+*.npy
+*.npz
+*.gguf
+*.onnx
+*.log
+*.pid
+*.status
+
+# Local configuration and secrets
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

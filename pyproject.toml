@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moss-lora"
+version = "1.0.0"
+description = "LoRA fine-tuning for MOSS-Image-Base (vendored pipeline, cached latents/text, single-GPU trainer)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "moss-lora contributors" }]
+keywords = ["moss-image", "lora", "flow-matching", "diffusion", "fine-tuning"]
+dependencies = [
+    "torch>=2.9",
+    "diffusers>=0.38",
+    "transformers>=5.3",
+    "accelerate>=1.10",
+    "safetensors>=0.6",
+    "Pillow>=10",
+    "numpy",
+    "PyYAML",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+moss-lora-cache = "moss_lora.cache:main"
+moss-lora-train = "moss_lora.trainer:main"
+moss-lora-sample = "moss_lora.sample:main"
+moss-lora-merge = "moss_lora.merge:main"
+moss-lora-bench = "moss_lora.benchmark:main"
+moss-lora-export-comfy = "moss_lora.export_comfy:main"
+
+[tool.setuptools.packages.find]
+include = ["moss_lora*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Vendored verbatim from upstream; SchedulerMixin is imported only for custom-component discovery.
+"moss_lora/model/moss_image.py" = ["I001", "E501", "F401"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

@@ -1,0 +1,9 @@
+torch>=2.9
+diffusers>=0.38
+transformers>=5.3
+accelerate>=1.10
+safetensors>=0.6
+Pillow>=10
+numpy
+PyYAML
+tqdm

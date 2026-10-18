@@ -1,0 +1,55 @@
+# MOSS-Image-Base LoRA, 1M-pixel (1024^2) training on one RTX 5090 32GB.
+# Point model.path at your local checkout (download to models/MOSS-Image-Base).
+# Build the cache first:
+#   moss-lora-cache --input <dataset> --output cache/1m --model models/MOSS-Image-Base \
+#     --target-area 1048576 --negative-prompt "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
+model:
+  path: models/MOSS-Image-Base
+  revision: 1ceede80badddd6a7812069619edaa5633587192
+  dtype: bf16
+  local_files_only: true
+data:
+  cache_dir: cache/1m
+  num_workers: 4
+  batch_size: 1
+  drop_last: true
+  pin_memory: true
+train:
+  device: cuda
+  output_dir: runs/moss_1m
+  max_steps: 2000
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  warmup_steps: 50
+  lr_scheduler: cosine
+  max_grad_norm: 1.0
+  seed: 42
+  gradient_checkpointing: true
+  compile: false
+  compile_mode: default
+  sdpa_backend: auto
+  ema_decay: 0.0
+  timestep_sampling: logit_normal
+  logit_normal_mean: -1.09
+  logit_normal_std: 0.95
+  sigma_cutoff: 0.95
+  uniform_mix: 0.01
+lora:
+  rank: 32
+  alpha: 32
+  dropout: 0.0
+  targets: [q, k, v, o, ffn_up_gate, ffn_down]
+  text_projection: false
+logging:
+  log_every: 10
+  save_every: 200
+  # No-op until sample_val_ids lists cache item ids (no VAE is loaded, nothing sampled).
+  # Fill sample_val_ids (see cache/index.json) to enable mid-training previews; set 0 to disable.
+  sample_every: 250
+  sample_steps: 30
+  sample_cfg: 3.0
+  sample_skip_layer: 22
+  sample_negative_prompt: "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
+  sample_val_ids: []

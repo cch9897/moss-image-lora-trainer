@@ -1,0 +1,222 @@
+{
+  "id": "moss-image-lora-example",
+  "revision": 0,
+  "last_node_id": 28,
+  "last_link_id": 54,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MOSSImageHFLoader",
+      "pos": [40, 110],
+      "size": [340, 150],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "slot_index": 0, "links": [53]},
+        {"name": "CLIP", "type": "CLIP", "slot_index": 1, "links": [1, 2]},
+        {"name": "VAE", "type": "VAE", "slot_index": 2, "links": [36]}
+      ],
+      "properties": {"Node name for S&R": "MOSSImageHFLoader"},
+      "widgets_values": ["models/MOSS-Image-Base", "default", "default"]
+    },
+    {
+      "id": 28,
+      "type": "LoraLoaderModelOnly",
+      "pos": [430, 90],
+      "size": [315, 130],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 53}
+      ],
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "slot_index": 0, "links": [54]}
+      ],
+      "properties": {"Node name for S&R": "LoraLoaderModelOnly"},
+      "widgets_values": ["my_lora_comfy.safetensors", 0.9]
+    },
+    {
+      "id": 15,
+      "type": "ModelSamplingSD3",
+      "pos": [800, 110],
+      "size": [315, 100],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 54}
+      ],
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "slot_index": 0, "links": [38]}
+      ],
+      "properties": {"Node name for S&R": "ModelSamplingSD3"},
+      "widgets_values": [5.0]
+    },
+    {
+      "id": 13,
+      "type": "SkipLayerGuidanceDiTSimple",
+      "pos": [1160, 110],
+      "size": [315, 170],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 38}
+      ],
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "slot_index": 0, "links": [52]}
+      ],
+      "properties": {"Node name for S&R": "SkipLayerGuidanceDiTSimple"},
+      "widgets_values": ["", "22", 0.0, 1.0]
+    },
+    {
+      "id": 4,
+      "type": "CLIPTextEncode",
+      "pos": [430, 380],
+      "size": [400, 200],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "clip", "type": "CLIP", "link": 1},
+        {"name": "text", "type": "STRING", "widget": {"name": "text"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [37]}
+      ],
+      "properties": {"Node name for S&R": "CLIPTextEncode"},
+      "widgets_values": ["a photograph of a mountain lake at sunrise, soft light, detailed"]
+    },
+    {
+      "id": 5,
+      "type": "CLIPTextEncode",
+      "pos": [430, 620],
+      "size": [400, 200],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {"name": "clip", "type": "CLIP", "link": 2},
+        {"name": "text", "type": "STRING", "widget": {"name": "text"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [39]}
+      ],
+      "properties": {"Node name for S&R": "CLIPTextEncode"},
+      "widgets_values": ["blurry, low quality, watermark, text, deformed"]
+    },
+    {
+      "id": 6,
+      "type": "EmptyFlux2LatentImage",
+      "pos": [880, 620],
+      "size": [315, 110],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "LATENT", "type": "LATENT", "slot_index": 0, "links": [43]}
+      ],
+      "properties": {"Node name for S&R": "EmptyFlux2LatentImage"},
+      "widgets_values": [1024, 1536, 1]
+    },
+    {
+      "id": 22,
+      "type": "SeedNode",
+      "pos": [880, 780],
+      "size": [315, 60],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "seed", "type": "INT", "slot_index": 0, "links": [42]}
+      ],
+      "properties": {"Node name for S&R": "SeedNode"},
+      "widgets_values": [123456789, "randomize"]
+    },
+    {
+      "id": 16,
+      "type": "KSampler",
+      "pos": [1520, 110],
+      "size": [315, 280],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 52},
+        {"name": "positive", "type": "CONDITIONING", "link": 37},
+        {"name": "negative", "type": "CONDITIONING", "link": 39},
+        {"name": "latent_image", "type": "LATENT", "link": 43},
+        {"name": "seed", "type": "INT", "widget": {"name": "seed"}, "link": 42},
+        {"name": "steps", "type": "INT", "widget": {"name": "steps"}, "link": null},
+        {"name": "cfg", "type": "FLOAT", "widget": {"name": "cfg"}, "link": null},
+        {"name": "sampler_name", "type": "COMBO", "widget": {"name": "sampler_name"}, "link": null},
+        {"name": "scheduler", "type": "COMBO", "widget": {"name": "scheduler"}, "link": null},
+        {"name": "denoise", "type": "FLOAT", "widget": {"name": "denoise"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "LATENT", "type": "LATENT", "slot_index": 0, "links": [40]}
+      ],
+      "properties": {"Node name for S&R": "KSampler"},
+      "widgets_values": [123456789, "fixed", 50, 3.0, "euler", "sgm_uniform", 1.0]
+    },
+    {
+      "id": 17,
+      "type": "VAEDecode",
+      "pos": [1880, 110],
+      "size": [210, 50],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {"name": "samples", "type": "LATENT", "link": 40},
+        {"name": "vae", "type": "VAE", "link": 36}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "slot_index": 0, "links": [41]}
+      ],
+      "properties": {"Node name for S&R": "VAEDecode"},
+      "widgets_values": []
+    },
+    {
+      "id": 20,
+      "type": "SaveImageAdvanced",
+      "pos": [2140, 110],
+      "size": [400, 400],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 41}
+      ],
+      "outputs": [
+        {"name": "images", "type": "IMAGE", "slot_index": 0, "links": null}
+      ],
+      "properties": {"Node name for S&R": "SaveImageAdvanced"},
+      "widgets_values": ["%date:yyyy-MM-dd%/ComfyUI", "png", "8-bit", "sRGB"]
+    }
+  ],
+  "links": [
+    [1, 1, 1, 4, 0, "CLIP"],
+    [2, 1, 1, 5, 0, "CLIP"],
+    [36, 1, 2, 17, 1, "VAE"],
+    [37, 4, 0, 16, 1, "CONDITIONING"],
+    [38, 15, 0, 13, 0, "MODEL"],
+    [39, 5, 0, 16, 2, "CONDITIONING"],
+    [40, 16, 0, 17, 0, "LATENT"],
+    [41, 17, 0, 20, 0, "IMAGE"],
+    [42, 22, 0, 16, 4, "INT"],
+    [43, 6, 0, 16, 3, "LATENT"],
+    [52, 13, 0, 16, 0, "MODEL"],
+    [53, 1, 0, 28, 0, "MODEL"],
+    [54, 28, 0, 15, 0, "MODEL"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
