@@ -94,10 +94,10 @@ def test_caption_variants_strings_and_dicts():
 def test_caption_variants_image_description_schema():
     """Annotated/sampled sidecars use image_description, not caption/text/prompt."""
     raw = {"year": 2025, "preference_level": "best",
-           "image_description": "@artist, 1girl, solo, city lights",
-           "extra_tags": ["1girl", "solo"]}
-    assert caption_variants(raw) == ["@artist, 1girl, solo, city lights"]
-    assert caption_variants(json.dumps(raw)) == ["@artist, 1girl, solo, city lights"]
+           "image_description": "@artist, landscape, sunset, city lights",
+           "extra_tags": ["landscape", "sunset"]}
+    assert caption_variants(raw) == ["@artist, landscape, sunset, city lights"]
+    assert caption_variants(json.dumps(raw)) == ["@artist, landscape, sunset, city lights"]
     with pytest.raises(ValueError):
         caption_variants({**raw, "image_description": "   "})
 

@@ -90,6 +90,11 @@ sidecar `.json` 或 `.txt` 除 `caption`/`text`/`prompt`/`layout` 外，也接�
 
 ## 2. Caption 变体：long / medium / short
 
+> 如果数据是「`@handle, artist:..., character:..., tags` + 中文段落 + 英文段落 + `#vlm`」的原始
+> prompt，不需要手工转换：运行 `scripts/prepare_captions.py` 生成保留画师条件的
+> long/medium/short、`metadata.jsonl` 和 token/裁剪报告，详见
+> [CAPTIONS.md](CAPTIONS.md)。
+
 官方 caption prompt 输出三个字段：
 
 ```json
@@ -252,7 +257,7 @@ bucket 边长由实现统一对齐到 64（模型只要求 16），范围 512–
 差：
 
 ```text
-a beautiful poster, high quality, masterpiece, 1girl, blue hair
+a beautiful poster, high quality, masterpiece, landscape, blue sky
 ```
 
 问题：没有构图、没有文字内容、没有风格信息；标签堆砌不能教会模型这张图独特在哪里。

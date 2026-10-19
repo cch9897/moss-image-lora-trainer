@@ -50,6 +50,10 @@ data/
 ```
 
 完整格式、layout、分桶与 caption 规范见 [docs/DATASET.md](docs/DATASET.md)，可直接参考 [`examples/`](examples/)。
+如果 sidecar 是「tag 行 + 中/英 prose」的原始 prompt，先用
+[`scripts/prepare_captions.py`](scripts/prepare_captions.py) 生成带 `artist:` 条件的
+long/medium/short captions、`metadata.jsonl` 和裁剪/token 报告，见
+[docs/CAPTIONS.md](docs/CAPTIONS.md)。
 
 ### 4. 缓存
 
@@ -119,6 +123,7 @@ moss-lora-export-comfy --adapter runs/moss_1m \
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | 只读实时看板：安装/启动、曲线与采样、状态/ETA、HTTP API、安全与 SSH 端口转发 |
 | [docs/5090.md](docs/5090.md) | 硬件基线、驱动/wheel 验证、显存规划、OOM 阶梯、性能开关、实测表 |
 | [docs/DATASET.md](docs/DATASET.md) | 数据目录、metadata.jsonl、layout JSON、caption 变体与质量规范 |
+| [docs/CAPTIONS.md](docs/CAPTIONS.md) | 原始 tag+prose 解析、混合画师 caption、单语言 prose、负向 tag 清理、文字/手部覆盖、分桶裁剪风险与报告字段 |
 | [docs/COMFYUI.md](docs/COMFYUI.md) | adapter 转换、ComfyUI 工作流接线、采样参数与排错 |
 | [docs/FAQ.md](docs/FAQ.md) | 常见问题与快速排查 |
 | [SECURITY.md](SECURITY.md) | 安全与隐私报告方式 |
