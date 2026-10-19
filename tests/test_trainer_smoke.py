@@ -86,10 +86,27 @@ def test_trainer_smoke_end_to_end(tmp_path, tiny_config):
     assert adapter.is_file()
     assert (run_dir / "adapter_config.json").is_file()
     assert (run_dir / "adapter_ema.safetensors").is_file()  # ema_decay=0.9
+
+    from safetensors.torch import load_file
+
+    raw = load_file(str(adapter))
+    comfy = run_dir / "comfyui_lora.safetensors"
+    assert comfy.is_file()
+    converted = load_file(str(comfy))
+    assert raw and all(key.startswith("layers.") for key in raw)
+    assert any(key.endswith(".lora_A") for key in raw)
+    assert converted and all(key.startswith("diffusion_model.") for key in converted)
+    assert any(key.endswith(".lora_A.weight") for key in converted)
+    assert any(key.endswith(".lora_B.weight") for key in converted)
+    assert any(key.endswith(".alpha") for key in converted)
+    assert not any(key.startswith("layers.") for key in converted)
+    assert len(converted) == len(raw) // 2 * 3  # A + B + alpha per pair
+
     checkpoint = run_dir / "checkpoints" / "step_000002"
     for name in ("adapter_model.safetensors", "optimizer.pt", "lr_scheduler.pt", "rng.pt",
                  "trainer_state.json"):
         assert (checkpoint / name).is_file(), name
+    assert not (checkpoint / "comfyui_lora.safetensors").exists()  # opt-in per checkpoint
     state = json.loads((checkpoint / "trainer_state.json").read_text())
     assert state["step"] == 2 and "config" in state
     assert (checkpoint / "adapter_ema.safetensors").is_file()
@@ -104,6 +121,22 @@ def test_trainer_smoke_end_to_end(tmp_path, tiny_config):
     sampled = run_dir / "samples" / "step_000002" / "item_00000.latent.pt"
     assert baseline.is_file() and sampled.is_file()
     assert torch.load(sampled, weights_only=False).shape[0] == 8
+
+
+def test_trainer_comfy_export_disabled(tmp_path, tiny_config):
+    config = load_config(tiny_config)
+    config.train.max_steps = 1
+    config.logging.comfy_export = False
+    result = trainer.train(config)
+    run_dir = Path(result["output_dir"])
+    assert (run_dir / "adapter_model.safetensors").is_file()
+    assert not (run_dir / "comfyui_lora.safetensors").exists()
+    assert not (run_dir / "checkpoints" / "step_000001" / "comfyui_lora.safetensors").exists()
+
+
+def test_comfy_export_failure_is_non_fatal(tmp_path, capsys):
+    assert trainer.export_comfy_adapter(tmp_path / "missing") is None
+    assert "ComfyUI LoRA export failed" in capsys.readouterr().err
 
 
 def test_trainer_resume_exact(tmp_path, tiny_config):

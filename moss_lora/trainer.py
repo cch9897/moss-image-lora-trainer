@@ -186,11 +186,36 @@ def checkpoint_dir(output_dir: Path, step: int) -> Path:
     return Path(output_dir) / CHECKPOINTS_DIR / f"step_{step:06d}"
 
 
+def export_comfy_adapter(adapter: str | Path,
+                         output: str | Path | None = None) -> dict[str, Any] | None:
+    """Write a ComfyUI-ready LoRA beside ``adapter``; never fail the training run.
+
+    ComfyUI cannot load ``adapter_model.safetensors`` (raw ``layers.*.proj.*.lora_A/B``
+    keys); it needs ``diffusion_model.*.lora_A.weight`` + ``.alpha``.  The raw adapter
+    is kept untouched for resume, sampling, and the trainer sampler.
+    """
+    adapter = Path(adapter)
+    try:
+        from moss_lora.export_comfy import COMFY_OUTPUT_NAME, convert_adapter
+
+        if output is None:
+            output = (adapter if adapter.is_dir() else adapter.parent) / COMFY_OUTPUT_NAME
+        summary = convert_adapter(adapter, output)
+    except Exception as exc:  # noqa: BLE001 - a failed export must not abort training
+        print(f"WARNING: ComfyUI LoRA export failed for {adapter}: {exc}", file=sys.stderr)
+        return None
+    print(f"[comfyui] wrote {summary['output']} ({summary['keys']} keys); load this file in ComfyUI, "
+          f"not adapter_model.safetensors")
+    return summary
+
+
 def save_checkpoint(config: TrainerConfig, model: MOSSImageTransformer, optimizer, lr_scheduler,
                     ema: ParamEMA | None, step: int, epoch: int, batch_index: int) -> Path:
     directory = checkpoint_dir(config.train.output_dir, step)
     save_adapter(unwrap_model(model), directory,
                  base_model=str(config.model.path), revision=config.model.revision)
+    if config.logging.comfy_export and config.logging.comfy_export_checkpoints:
+        export_comfy_adapter(directory)
     if ema is not None:
         atomic_save_safetensors(ema.state_dict(), directory / ADAPTER_EMA_NAME,
                                 metadata={"format": "pt", "moss_lora_version": __version__,
@@ -437,6 +462,8 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
         atomic_save_safetensors(ema.state_dict(), output_dir / ADAPTER_EMA_NAME,
                                 metadata={"format": "pt", "moss_lora_version": __version__,
                                           "ema_decay": str(ema.decay)})
+    if config.logging.comfy_export:
+        export_comfy_adapter(output_dir)
     return {"steps": completed_step, "checkpoint": str(final_dir), "output_dir": str(output_dir)}
 
 
@@ -451,12 +478,16 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--device", default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--val-ids", default=None, help="Comma-separated cache item ids for validation")
+    parser.add_argument("--comfy-export", action=argparse.BooleanOptionalAction, default=None,
+                        help="Write <output-dir>/comfyui_lora.safetensors for ComfyUI after training "
+                             "(default: logging.comfy_export from the YAML config)")
     args = parser.parse_args(argv)
 
     config = apply_cli_overrides(
         load_config(args.config), max_steps=args.max_steps, output_dir=args.output_dir,
         device=args.device, batch_size=args.batch_size,
-        val_ids=[value for value in (args.val_ids or "").split(",") if value])
+        val_ids=[value for value in (args.val_ids or "").split(",") if value],
+        comfy_export=args.comfy_export)
     train(config, resume_path=args.resume)
 
 

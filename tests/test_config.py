@@ -30,6 +30,8 @@ def test_defaults():
     assert config.adamw_eps == 1e-8
     assert LoraConfig().targets == ["q", "k", "v", "o", "ffn_up_gate", "ffn_down"]
     assert LoggingConfig().sample_skip_layer == 22
+    assert LoggingConfig().comfy_export is True
+    assert LoggingConfig().comfy_export_checkpoints is False
     assert DataConfig().drop_last is True
     assert ModelConfig().dtype == "bf16"
 
@@ -43,7 +45,8 @@ def test_load_full_yaml(tmp_path):
         "train": {"device": "cuda", "output_dir": "runs/x", "max_steps": 10, "betas": [0.9, 0.95],
                   "timestep_sampling": "uniform_grid"},
         "lora": {"rank": 8, "alpha": None, "targets": ["q", "v"], "text_projection": True},
-        "logging": {"sample_val_ids": ["item_00000"], "sample_skip_layer": -1},
+        "logging": {"sample_val_ids": ["item_00000"], "sample_skip_layer": -1,
+                    "comfy_export": False, "comfy_export_checkpoints": True},
     }
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(payload), encoding="utf-8")
@@ -54,6 +57,8 @@ def test_load_full_yaml(tmp_path):
     assert config.lora.alpha is None
     assert config.lora.text_projection is True
     assert config.logging.sample_skip_layer == -1
+    assert config.logging.comfy_export is False
+    assert config.logging.comfy_export_checkpoints is True
 
 
 def test_unknown_keys_rejected(tmp_path):
@@ -72,15 +77,17 @@ def test_cli_overrides(tmp_path):
                                     "data": {"batch_size": 1},
                                     "logging": {"sample_val_ids": ["x"]}}), encoding="utf-8")
     config = apply_cli_overrides(load_config(path), max_steps=7, output_dir="runs/b", device="cpu",
-                                 batch_size=5, val_ids=["a", "b"])
+                                 batch_size=5, val_ids=["a", "b"], comfy_export=False)
     assert config.train.max_steps == 7
     assert config.train.output_dir == "runs/b"
     assert config.train.device == "cpu"
     assert config.data.batch_size == 5
     assert config.logging.sample_val_ids == ["a", "b"]
+    assert config.logging.comfy_export is False
     unchanged = apply_cli_overrides(load_config(path))
     assert unchanged.train.max_steps == 100
     assert unchanged.logging.sample_val_ids == ["x"]
+    assert unchanged.logging.comfy_export is True
 
 
 @pytest.mark.parametrize("name,expected", [
@@ -103,6 +110,8 @@ def test_shipped_configs_parse():
         assert config.train.timestep_sampling == "logit_normal"
         assert config.train.betas == (0.9, 0.95)
         assert config.lora.rank > 0
+        assert config.logging.comfy_export is True
+        assert config.logging.comfy_export_checkpoints is False
     one_m = load_config(root / "configs" / "train_5090_1m.yaml")
     fast = load_config(root / "configs" / "train_5090_512.yaml")
     assert one_m.data.batch_size == 1 and one_m.train.max_steps == 2000

@@ -43,6 +43,10 @@ lora:
 logging:
   log_every: 1
   save_every: 2
+  # Write <run>/comfyui_lora.safetensors for ComfyUI; adapter_model.safetensors stays for resume/sampling.
+  comfy_export: true
+  # Off: convert an interrupted run's latest checkpoint with `moss-lora-export-comfy --run-dir <run>`.
+  comfy_export_checkpoints: false
   sample_every: 2
   sample_steps: 2
   sample_cfg: 3.0

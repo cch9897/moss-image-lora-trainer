@@ -28,6 +28,7 @@ from moss_lora.lora import ADAPTER_CONFIG_NAME, ADAPTER_WEIGHTS_NAME, DEFAULT_TA
 
 COMFY_PREFIX = "diffusion_model."
 COMFY_METADATA_KEY = "moss_lora_comfy"
+COMFY_OUTPUT_NAME = "comfyui_lora.safetensors"
 KEY_PATTERN = re.compile(r"^layers\.(\d+)\.proj\.([A-Za-z0-9_]+)\.lora_([AB])$")
 
 
@@ -220,19 +221,63 @@ def convert_adapter(adapter: str | Path, output: str | Path) -> dict[str, Any]:
     }
 
 
+def find_latest_adapter(run_dir: str | Path) -> Path:
+    """Return the newest complete adapter directory in a training run.
+
+    Checkpoints are considered newest-first, then the run root (the final save after
+    training).  A directory is complete when both the weights and adapter_config.json
+    exist, so half-written or unrelated ``step_*`` directories are ignored.
+    """
+    root = Path(run_dir)
+    checkpoints_dir = root / "checkpoints"
+    checkpoints = sorted(checkpoints_dir.glob("step_*")) if checkpoints_dir.is_dir() else []
+    for candidate in [*reversed(checkpoints), root]:
+        if (candidate / ADAPTER_WEIGHTS_NAME).is_file() and (candidate / ADAPTER_CONFIG_NAME).is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"No complete adapter ({ADAPTER_WEIGHTS_NAME} + {ADAPTER_CONFIG_NAME}) in "
+        f"{checkpoints_dir} or {root}"
+    )
+
+
+def export_latest_checkpoint(run_dir: str | Path,
+                             output: str | Path | None = None) -> dict[str, Any]:
+    """Convert the newest adapter in a run (or an interrupted run's checkpoint).
+
+    Defaults to ``<run>/comfyui_lora.safetensors`` so the result is ready to drop
+    into ComfyUI's ``models/loras`` directory.
+    """
+    run_dir = Path(run_dir)
+    adapter = find_latest_adapter(run_dir)
+    return convert_adapter(adapter, Path(output) if output is not None
+                           else run_dir / COMFY_OUTPUT_NAME)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="moss-lora-export-comfy",
         description="Convert a MOSS-LoRA-Trainer adapter to ComfyUI LoRA naming.",
     )
-    parser.add_argument("--adapter", required=True,
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--adapter",
                         help="Adapter directory (adapter_model.safetensors + adapter_config.json) "
                              "or path to a weights file with adapter_config.json beside it")
-    parser.add_argument("--output", required=True, help="Output .safetensors path")
+    source.add_argument("--run-dir",
+                        help="Training run directory: exports the newest checkpoints/step_* adapter, "
+                             "falling back to the run root")
+    parser.add_argument("--output",
+                        help=f"Output .safetensors path (default: {COMFY_OUTPUT_NAME} beside the "
+                             "adapter, or at the run root with --run-dir)")
     args = parser.parse_args(argv)
 
     try:
-        summary = convert_adapter(args.adapter, args.output)
+        if args.run_dir:
+            summary = export_latest_checkpoint(args.run_dir, args.output)
+        else:
+            adapter = Path(args.adapter)
+            output = Path(args.output) if args.output else (
+                (adapter if adapter.is_dir() else adapter.parent) / COMFY_OUTPUT_NAME)
+            summary = convert_adapter(adapter, output)
     except (ConversionError, FileNotFoundError, json.JSONDecodeError, KeyError) as exc:
         parser.exit(2, f"moss-lora-export-comfy: error: {exc}\n")
 

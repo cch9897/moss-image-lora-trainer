@@ -45,6 +45,10 @@ lora:
 logging:
   log_every: 10
   save_every: 200
+  # Write <run>/comfyui_lora.safetensors for ComfyUI; adapter_model.safetensors stays for resume/sampling.
+  comfy_export: true
+  # Off: convert an interrupted run's latest checkpoint with `moss-lora-export-comfy --run-dir <run>`.
+  comfy_export_checkpoints: false
   # No-op until sample_val_ids lists cache item ids (no VAE is loaded, nothing sampled).
   # Fill sample_val_ids (see cache/index.json) to enable mid-training previews; set 0 to disable.
   sample_every: 250

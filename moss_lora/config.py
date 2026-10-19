@@ -90,6 +90,11 @@ class LoraConfig:
 class LoggingConfig:
     log_every: int = 10
     save_every: int = 200
+    # Write <run>/comfyui_lora.safetensors after training (raw adapter_model.safetensors stays).
+    comfy_export: bool = True
+    # Also export inside every checkpoints/step_XXXXXX directory. Off by default: convert a
+    # checkpoint afterwards with `moss-lora-export-comfy --run-dir <run>`.
+    comfy_export_checkpoints: bool = False
     sample_every: int = 0
     sample_steps: int = 30
     sample_cfg: float = 3.0
@@ -138,7 +143,8 @@ def load_config(path: str | Path) -> TrainerConfig:
 
 def apply_cli_overrides(config: TrainerConfig, *, max_steps: int | None = None,
                         output_dir: str | None = None, device: str | None = None,
-                        batch_size: int | None = None, val_ids: list[str] | None = None) -> TrainerConfig:
+                        batch_size: int | None = None, val_ids: list[str] | None = None,
+                        comfy_export: bool | None = None) -> TrainerConfig:
     if max_steps is not None:
         config.train.max_steps = max_steps
     if output_dir is not None:
@@ -149,4 +155,6 @@ def apply_cli_overrides(config: TrainerConfig, *, max_steps: int | None = None,
         config.data.batch_size = batch_size
     if val_ids:
         config.logging.sample_val_ids = val_ids
+    if comfy_export is not None:
+        config.logging.comfy_export = comfy_export
     return config
