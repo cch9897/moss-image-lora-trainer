@@ -186,6 +186,8 @@ bbox = [96 - 512, 128 - 512, 224 - 512, 896 - 512]
 
 `layout` 对象会被序列化为紧凑 JSON 字符串（无多余空格），再走与自然语言相同的 chat template / 文本编码路径。`items[].text` 的原文必须保留，不要翻译、不要改写大小写、不要动换行。
 
+> 需要从图片自动生成 OCR + bbox layout 时，使用 `scripts/prepare_captions.py --ocr rapidocr --layout-mode variant|both`；它会按 cache 的 bucket 做坐标变换，详见 [CAPTIONS.md](CAPTIONS.md#8-ocr-与-layout可选)。
+
 ### 3.4 坐标必须匹配最终画布
 
 这是 layout 数据最容易出错的地方：

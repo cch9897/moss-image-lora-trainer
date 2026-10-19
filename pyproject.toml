@@ -26,6 +26,8 @@ dependencies = [
 [project.optional-dependencies]
 dashboard = ["fastapi>=0.115", "uvicorn>=0.30"]
 dev = ["pytest", "ruff", "fastapi>=0.115", "httpx>=0.27"]
+# Lightweight CPU OCR (Chinese/English); tesseract uses the system binary.
+ocr = ["rapidocr-onnxruntime>=1.2"]
 
 [project.scripts]
 moss-lora-cache = "moss_lora.cache:main"

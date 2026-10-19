@@ -37,6 +37,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import unicodedata
 import uuid
 from collections import Counter
@@ -49,6 +50,19 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from moss_lora.cache import IMAGE_EXTS, assign_bucket, build_buckets  # noqa: E402
+from moss_lora.ocr import (  # noqa: E402
+    OCR_BACKENDS,
+    OCRError,
+    backend_available,
+    bucket_geometry,
+    confidence_distribution,
+    layout_json,
+    make_layout,
+    parse_languages,
+    resolve_ocr_device,
+    run_ocr,
+    transform_ocr_items,
+)
 
 TRIGGER_DEFAULT = "mystyle"
 UNKNOWN_ARTIST = "unknown"
@@ -71,6 +85,16 @@ NEGATIVE_TAG_KEYS = frozenset(tag.replace("_", " ") for tag in NEGATIVE_TAGS)
 TEXT_HAND_TERMS = ("text", "speech bubble", "sign", "writing", "hand", "hands", "fingers", "holding")
 TEXT_GROUP = frozenset(("text", "speech bubble", "sign", "writing"))
 HAND_GROUP = frozenset(("hand", "hands", "fingers", "holding"))
+TAG_FAMILY_ROOTS: dict[str, tuple[str, ...]] = {
+    "text": ("text",),
+    "speech bubble": ("speech bubble",),
+    "sign": ("sign",),
+    "writing": ("writ",),
+    "hand": ("hand",),
+    "hands": ("hands",),
+    "fingers": ("finger",),
+    "holding": ("hold",),
+}
 ZH_COVERAGE_TERMS: dict[str, tuple[str, ...]] = {
     "text": ("文字", "文本", "字样"),
     "speech bubble": ("对话气泡", "气泡", "对话框"),
@@ -853,6 +877,53 @@ def build_captions(item: PreparedItem, *, trigger: str, language: str,
     }
 
 
+def _layout_summary_candidates(item: PreparedItem, captions: dict[str, Any],
+                               trigger: str) -> list[tuple[str, str]]:
+    prefix_parts = _prefix(trigger, item.artist, item.characters, include_artist=True)
+    prefix = _compose(prefix_parts, [], "")
+    first_prose = captions.get("first_prose", "")
+    minimal = _compose(prefix_parts, [], first_prose) if first_prose else prefix
+    return [
+        ("full", captions["long"]),
+        ("medium", captions["medium"]),
+        ("minimal", minimal),
+        ("prefix", prefix),
+    ]
+
+
+def fit_layout(item: PreparedItem, captions: dict[str, Any], visible: Sequence[tuple[list[int], Any]],
+               *, trigger: str, tokenizer: Any | None, max_tokens: int
+               ) -> tuple[dict[str, Any], int, bool, str | None]:
+    """Build a layout under the token budget, preserving trigger/artist/character.
+
+    Summary prose is shortened first (full -> medium -> prefix + first
+    paragraph), then the lowest-confidence text items are dropped.  ``prefix``
+    only exists as a last resort for an impossibly small budget.
+    """
+    candidates = _layout_summary_candidates(item, captions, trigger)
+    for label, summary in candidates[:3]:
+        layout = make_layout(summary, visible)
+        tokens = token_length(tokenizer, layout_json(layout))
+        if tokens <= max_tokens:
+            reason = None if label == "full" else f"summary={label}"
+            return layout, tokens, label != "full", reason
+    items = list(visible)
+    minimal = candidates[2][1]
+    while items:
+        # Lowest-confidence item first, regardless of reading order.
+        index = min(range(len(items)), key=lambda position: items[position][1].confidence)
+        items.pop(index)
+        layout = make_layout(minimal, items)
+        tokens = token_length(tokenizer, layout_json(layout))
+        if tokens <= max_tokens:
+            return layout, tokens, True, f"summary=minimal;dropped_items={len(visible) - len(items)}"
+    # Last resort: no items and no prose.
+    prefix_only = candidates[3][1]
+    layout = make_layout(prefix_only, [])
+    tokens = token_length(tokenizer, layout_json(layout))
+    return layout, tokens, True, "summary=prefix;dropped_items=all" if tokens <= max_tokens else "over_budget"
+
+
 # --------------------------------------------------------------------------- image/report helpers
 
 
@@ -963,15 +1034,37 @@ def load_tokenizer(tokenizer: str | Path | None) -> tuple[Any | None, str | None
 
 
 def token_length(tokenizer: Any | None, text: str) -> int:
+    """Exact cache-time length: chat template + tokenizer, else raw/estimate."""
     if tokenizer is None:
         return estimate_tokens(text)
-    encoded = tokenizer.encode(text, add_special_tokens=False)
-    return len(encoded)
+    try:
+        formatted = tokenizer.apply_chat_template(
+            [{"role": "user", "content": text}], tokenize=False,
+            add_generation_prompt=True, enable_thinking=True,
+        )
+        encoded = tokenizer(formatted)
+        input_ids = encoded["input_ids"]
+        if input_ids and isinstance(input_ids[0], list):
+            input_ids = input_ids[0]
+        return len(input_ids)
+    except Exception:
+        try:
+            return len(tokenizer.encode(text))
+        except Exception:
+            return estimate_tokens(text)
 
 
 def _tag_hits(caption: dict[str, Any]) -> set[str]:
     keys = {normalize_tag_key(tag) for tag in caption.get("tags", [])}
     return {term for term in TEXT_HAND_TERMS if term in keys}
+
+
+def _tag_family_hits(caption: dict[str, Any]) -> set[str]:
+    keys = {normalize_tag_key(tag) for tag in caption.get("tags", [])}
+    return {
+        term for term in TEXT_HAND_TERMS
+        if any(root in key for key in keys for root in TAG_FAMILY_ROOTS[term])
+    }
 
 
 def _prose_hits(caption: dict[str, Any]) -> set[str]:
@@ -1009,12 +1102,16 @@ def _coverage_from_hits(hits: Sequence[set[str]]) -> dict[str, Any]:
 
 def coverage_report(captions: Sequence[dict[str, Any]]) -> dict[str, Any]:
     tag_hits = [_tag_hits(caption) for caption in captions]
+    family_hits = [_tag_family_hits(caption) for caption in captions]
     prose_hits = [_prose_hits(caption) for caption in captions]
     any_hits = [tags | prose for tags, prose in zip(tag_hits, prose_hits)]
+    any_family = [family | prose for family, prose in zip(family_hits, prose_hits)]
     return {
         "tags": _coverage_from_hits(tag_hits),
+        "tags_family": _coverage_from_hits(family_hits),
         "prose": _coverage_from_hits(prose_hits),
         "any": _coverage_from_hits(any_hits),
+        "any_family": _coverage_from_hits(any_family),
     }
 
 
@@ -1188,21 +1285,51 @@ def render_report_markdown(report: dict[str, Any]) -> str:
         f"- Tokenizer: `{tokens['mode']}`" + (f" (`{tokens['path']}`)" if tokens.get("path") else ""),
         f"- Tags per item (before cap): `{json.dumps(report['tags']['per_item'], sort_keys=True)}`",
         "",
+        "## OCR and layout",
+        "",
+        f"- OCR backend: `{report['ocr']['backend']}` on `{report['ocr']['device']}` "
+        f"(GPU requested: {report['ocr']['gpu_requested']})",
+        f"- Languages: `{'+'.join(report['ocr']['languages']) or 'n/a'}`; "
+        f"wall time: {report['ocr']['wall_seconds']} s",
+        f"- Images processed: {report['ocr']['images_processed']}; "
+        f"with text: {report['ocr']['images_with_text']}; "
+        f"errors: {report['ocr']['images_errors']}",
+        f"- Boxes raw/kept: {report['ocr']['raw_boxes']}/{report['ocr']['kept_boxes']}; "
+        f"outside crop: {report['ocr']['outside_crop']}; clipped: {report['ocr']['clipped']}; "
+        f"deduped: {report['ocr']['deduped']}; truncated: {report['ocr']['truncated']}",
+        f"- Confidence p50/p95: {report['ocr']['confidence']['p50']} / "
+        f"{report['ocr']['confidence']['p95']}",
+        "",
+        f"- Layout mode: `{report['layout']['mode']}`; images: {report['layout']['images']}; "
+        f"items: {report['layout']['items_total']} "
+        f"(mean {report['layout']['items_mean']})",
+        "| layout tokens | p50 | p95 | max | >1024 | >2048 |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        f"| all layouts | {report['layout']['tokens']['p50']} | "
+        f"{report['layout']['tokens']['p95']} | {report['layout']['tokens']['max']} | "
+        f"{report['layout']['tokens']['over_1024']['pct']}% | "
+        f"{report['layout']['tokens']['over_2048']['pct']}% |",
+        f"- Layout truncations: {report['layout']['truncated']} "
+        f"(over budget: {report['layout']['over_budget']})",
+        "",
         "## Text / hand coverage",
         "",
-        "| term | tag % | prose % | any % |",
-        "| --- | ---: | ---: | ---: |",
+        "| term | tag exact % | tag family % | prose % | any % |",
+        "| --- | ---: | ---: | ---: | ---: |",
     ])
     for term in TEXT_HAND_TERMS:
         lines.append(
             f"| `{term}` | {report['text_hand_coverage']['tags']['terms'][term]['pct']} | "
+            f"{report['text_hand_coverage']['tags_family']['terms'][term]['pct']} | "
             f"{report['text_hand_coverage']['prose']['terms'][term]['pct']} | "
             f"{report['text_hand_coverage']['any']['terms'][term]['pct']} |"
         )
     lines.extend([
         "",
-        f"- Any text group: **{report['text_hand_coverage']['any']['text_group']['pct']}%**",
-        f"- Any hand group: **{report['text_hand_coverage']['any']['hand_group']['pct']}%**",
+        f"- Any text group (exact): **{report['text_hand_coverage']['any']['text_group']['pct']}%**; "
+        f"(tag family): **{report['text_hand_coverage']['any_family']['text_group']['pct']}%**",
+        f"- Any hand group (exact): **{report['text_hand_coverage']['any']['hand_group']['pct']}%**; "
+        f"(tag family): **{report['text_hand_coverage']['any_family']['hand_group']['pct']}%**",
         "",
         "## Crop risk",
         "",
@@ -1257,6 +1384,14 @@ class PrepareConfig:
     tokenizer: str | Path | None = None
     target_area: int = 1024 * 1024
     force: bool = False
+    ocr: str = "none"
+    ocr_lang: str = "ch_sim+en"
+    ocr_gpu: bool = False
+    ocr_min_confidence: float = 0.5
+    ocr_max_items: int = 20
+    ocr_max_side: int = 1600
+    layout_mode: str = "both"
+    layout_max_tokens: int = 1024
 
 
 def prepare_dataset(input_path: str | Path, output_dir: str | Path,
@@ -1272,6 +1407,23 @@ def prepare_dataset(input_path: str | Path, output_dir: str | Path,
         raise PrepareError("--min-artist-count must be >= 1")
     if config.max_per_artist is not None and config.max_per_artist < 1:
         raise PrepareError("--max-per-artist must be >= 1")
+    if config.ocr not in OCR_BACKENDS:
+        raise PrepareError(f"--ocr must be one of {', '.join(OCR_BACKENDS)}, got {config.ocr!r}")
+    if config.ocr != "none" and not backend_available(config.ocr):
+        raise PrepareError(
+            f"OCR backend {config.ocr!r} is not installed; install it or use --ocr none "
+            f"(available: {', '.join(name for name in OCR_BACKENDS if backend_available(name))})"
+        )
+    if not 0.0 <= config.ocr_min_confidence <= 1.0:
+        raise PrepareError("--ocr-min-confidence must be between 0 and 1")
+    if config.ocr_max_items < 1:
+        raise PrepareError("--ocr-max-items must be >= 1")
+    if config.ocr_max_side < 0:
+        raise PrepareError("--ocr-max-side must be >= 0")
+    if config.layout_mode not in ("field", "variant", "both"):
+        raise PrepareError("--layout-mode must be field, variant or both")
+    if config.layout_max_tokens < 64:
+        raise PrepareError("--layout-max-tokens must be >= 64")
 
     input_resolved = input_path.resolve()
     output_resolved = output_dir.resolve()
@@ -1325,6 +1477,27 @@ def prepare_dataset(input_path: str | Path, output_dir: str | Path,
     unreadable = 0
     copy_failed = 0
     index = 0
+    ocr_device = resolve_ocr_device(config.ocr, config.ocr_gpu)
+    ocr_seconds = 0.0
+    ocr_images_processed = 0
+    ocr_images_with_raw = 0
+    ocr_images_with_text = 0
+    ocr_errors = 0
+    ocr_error_samples: list[dict[str, str]] = []
+    ocr_raw_boxes = 0
+    ocr_kept_boxes = 0
+    ocr_outside_crop = 0
+    ocr_clipped = 0
+    ocr_deduped = 0
+    ocr_truncated = 0
+    ocr_confidences: list[float] = []
+    ocr_text_chars: list[int] = []
+    layout_images = 0
+    layout_items_total = 0
+    layout_token_values: list[int] = []
+    layout_truncated = 0
+    layout_over_budget = 0
+    layout_reasons: Counter[str] = Counter()
 
     for item in kept:
         try:
@@ -1351,16 +1524,82 @@ def prepare_dataset(input_path: str | Path, output_dir: str | Path,
         output_modes[mode] += 1
         linked_bytes += info["bytes"]
         image_hashes.append(info["sha256"])
-        caption_hashes.append(sha256_text(captions["long"]))
         removed_negatives.update(item.removed_negatives)
         tag_counts.append(len(item.tags))
         language_counts[captions["language_used"]] += 1
         for name in token_values:
             token_values[name].append(token_length(tokenizer, captions[name]))
 
+        caption_variants = {name: captions[name] for name in ("long", "medium", "short")}
+        record_layout: dict[str, Any] | None = None
+        if config.ocr != "none":
+            ocr_images_processed += 1
+            ocr_started = time.perf_counter()
+            try:
+                from PIL import Image
+
+                with Image.open(item.image) as source_image:
+                    ocr_result = run_ocr(
+                        source_image,
+                        backend=config.ocr,
+                        languages=config.ocr_lang,
+                        gpu=config.ocr_gpu,
+                        min_confidence=config.ocr_min_confidence,
+                        max_items=config.ocr_max_items,
+                        max_side=config.ocr_max_side,
+                    )
+                ocr_raw_boxes += ocr_result.raw_count
+                ocr_deduped += ocr_result.deduped
+                ocr_truncated += ocr_result.truncated
+                if ocr_result.items:
+                    ocr_images_with_raw += 1
+                geometry = bucket_geometry(
+                    (info["width"], info["height"]), tuple(info["bucket"])
+                )
+                visible, transform_stats = transform_ocr_items(ocr_result.items, geometry)
+                ocr_outside_crop += transform_stats["outside_crop"]
+                ocr_clipped += transform_stats["clipped"]
+                ocr_kept_boxes += len(visible)
+                if visible:
+                    layout, layout_tokens, was_truncated, reason = fit_layout(
+                        item, captions, visible, trigger=trig,
+                        tokenizer=tokenizer, max_tokens=config.layout_max_tokens,
+                    )
+                    ocr_images_with_text += 1
+                    layout_images += 1
+                    layout_items_total += len(layout["items"])
+                    layout_token_values.append(layout_tokens)
+                    if was_truncated:
+                        layout_truncated += 1
+                        layout_reasons[reason or "truncated"] += 1
+                    if reason == "over_budget":
+                        layout_over_budget += 1
+                    ocr_confidences.extend(entry.confidence for _, entry in visible)
+                    ocr_text_chars.extend(len(entry.text) for _, entry in visible)
+                    layout_text = layout_json(layout)
+                    if config.layout_mode in ("variant", "both"):
+                        caption_variants["long"] = layout_text
+                    if config.layout_mode in ("field", "both"):
+                        record_layout = layout
+            except Exception as error:
+                ocr_errors += 1
+                ocr_error_samples.append({
+                    "source": item.source_rel,
+                    "error": f"{type(error).__name__}: {error}"[:500],
+                })
+            finally:
+                ocr_seconds += time.perf_counter() - ocr_started
+            if ocr_images_processed % 25 == 0:
+                print(
+                    f"OCR {ocr_images_processed}/{len(kept)} images, "
+                    f"{ocr_images_with_text} with text, {ocr_errors} errors",
+                    file=sys.stderr,
+                )
+        caption_hashes.append(sha256_text(caption_variants["long"]))
+
         record: dict[str, Any] = {
             "file_name": file_name,
-            "caption": {name: captions[name] for name in ("long", "medium", "short")},
+            "caption": caption_variants,
             "artist": item.artist,
             "character": item.characters,
             "tags": item.tags,
@@ -1370,6 +1609,8 @@ def prepare_dataset(input_path: str | Path, output_dir: str | Path,
         }
         if item.layout is not None:
             record["layout"] = item.layout
+        if record_layout is not None:
+            record["layout"] = record_layout
         records.append(record)
         caption_rows.append({
             "source": item.source_rel,
@@ -1409,6 +1650,45 @@ def prepare_dataset(input_path: str | Path, output_dir: str | Path,
         }
 
     coverage = coverage_report(caption_rows)
+    ocr_report: dict[str, Any] = {
+        "backend": config.ocr,
+        "device": ocr_device,
+        "gpu_requested": config.ocr_gpu,
+        "languages": parse_languages(config.ocr_lang) if config.ocr != "none" else [],
+        "min_confidence": config.ocr_min_confidence,
+        "max_items": config.ocr_max_items,
+        "max_side": config.ocr_max_side,
+        "wall_seconds": round(ocr_seconds, 2),
+        "images_processed": ocr_images_processed,
+        "images_with_raw_boxes": ocr_images_with_raw,
+        "images_with_text": ocr_images_with_text,
+        "images_without_text": max(0, ocr_images_processed - ocr_images_with_text),
+        "images_errors": ocr_errors,
+        "raw_boxes": ocr_raw_boxes,
+        "kept_boxes": ocr_kept_boxes,
+        "outside_crop": ocr_outside_crop,
+        "clipped": ocr_clipped,
+        "deduped": ocr_deduped,
+        "truncated": ocr_truncated,
+        "confidence": confidence_distribution(ocr_confidences),
+        "text_chars": distribution(ocr_text_chars),
+        "errors": ocr_error_samples[:20],
+    }
+    layout_report: dict[str, Any] = {
+        "mode": config.layout_mode,
+        "max_tokens": config.layout_max_tokens,
+        "images": layout_images,
+        "items_total": layout_items_total,
+        "items_mean": round(layout_items_total / layout_images, 2) if layout_images else 0.0,
+        "tokens": {
+            **distribution(layout_token_values),
+            "over_1024": over_threshold(layout_token_values, 1024),
+            "over_2048": over_threshold(layout_token_values, 2048),
+        },
+        "truncated": layout_truncated,
+        "over_budget": layout_over_budget,
+        "truncation_reasons": dict(sorted(layout_reasons.items())),
+    }
 
     real_artist_counts = Counter({
         name: count for name, count in artist_counts.items() if name != UNKNOWN_ARTIST
@@ -1503,6 +1783,8 @@ def prepare_dataset(input_path: str | Path, output_dir: str | Path,
             "max_tags": config.max_tags,
         },
         "tokens": token_report,
+        "ocr": ocr_report,
+        "layout": layout_report,
         "text_hand_coverage": coverage,
         "duplicates": {
             "images": duplicate_stats(image_hashes),
@@ -1593,6 +1875,25 @@ def build_parser() -> argparse.ArgumentParser:
                              "(default: auto-detect; 'none' disables)")
     parser.add_argument("--target-area", type=int, default=1024 * 1024,
                         help="Cache bucket target area for crop-risk reporting (default: 1024^2)")
+    parser.add_argument("--ocr", default="none", choices=list(OCR_BACKENDS),
+                        help="OCR backend (default: none). rapidocr/tesseract are lightweight CPU options")
+    parser.add_argument("--ocr-lang", default="ch_sim+en",
+                        help="OCR languages separated by '+' (default: ch_sim+en; "
+                             "rapidocr supports ch/en only, use tesseract/easyocr for ja)")
+    parser.add_argument("--ocr-gpu", action="store_true",
+                        help="Request GPU OCR; falls back to CPU when the backend/provider is unavailable")
+    parser.add_argument("--ocr-min-confidence", type=float, default=0.5,
+                        help="Drop OCR items below this confidence (default: 0.5)")
+    parser.add_argument("--ocr-max-items", type=int, default=20,
+                        help="Maximum text items per image (default: 20)")
+    parser.add_argument("--ocr-max-side", type=int, default=1600,
+                        help="Downscale OCR input to this maximum side; boxes are mapped back "
+                             "(default: 1600, 0 disables; 2048 is slower but helps small text)")
+    parser.add_argument("--layout-mode", default="both", choices=["field", "variant", "both"],
+                        help="field = metadata only; variant = caption.long layout JSON; "
+                             "both = field + variant (default: both)")
+    parser.add_argument("--layout-max-tokens", type=int, default=1024,
+                        help="Token budget for one layout JSON (default: 1024)")
     parser.add_argument("--force", action="store_true",
                         help="Replace generated files in a non-empty output directory")
     return parser
@@ -1612,10 +1913,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         tokenizer=args.tokenizer,
         target_area=args.target_area,
         force=args.force,
+        ocr=args.ocr,
+        ocr_lang=args.ocr_lang,
+        ocr_gpu=args.ocr_gpu,
+        ocr_min_confidence=args.ocr_min_confidence,
+        ocr_max_items=args.ocr_max_items,
+        ocr_max_side=args.ocr_max_side,
+        layout_mode=args.layout_mode,
+        layout_max_tokens=args.layout_max_tokens,
     )
     try:
         report = prepare_dataset(Path(args.input), Path(args.output), config)
-    except (PrepareError, FileNotFoundError, ValueError) as error:
+    except (PrepareError, FileNotFoundError, ValueError, OCRError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(
@@ -1632,6 +1941,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if report["tokens"]["mode"] == "estimate":
         print("warning: model tokenizer unavailable; token lengths are estimates", file=sys.stderr)
+    if config.ocr != "none":
+        ocr = report["ocr"]
+        print(
+            f"OCR {ocr['backend']} on {ocr['device']}: "
+            f"{ocr['images_with_text']}/{ocr['images_processed']} images with text, "
+            f"{ocr['kept_boxes']} boxes, {ocr['wall_seconds']} s"
+        )
+        if config.ocr_gpu and ocr["device"] == "cpu":
+            print("warning: OCR GPU requested but unavailable; ran on CPU", file=sys.stderr)
+        if ocr["images_errors"]:
+            print(f"warning: {ocr['images_errors']} OCR image errors; see report.json", file=sys.stderr)
+        if report["layout"]["truncated"]:
+            print(
+                f"warning: {report['layout']['truncated']} layouts were shortened to fit "
+                f"--layout-max-tokens {config.layout_max_tokens}",
+                file=sys.stderr,
+            )
     return 0
 
 

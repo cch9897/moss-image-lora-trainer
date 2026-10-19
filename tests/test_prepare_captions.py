@@ -481,6 +481,28 @@ def test_tokenizer_fallback_and_token_lengths(tmp_path):
 
     assert token_length(FakeTokenizer(), "one two three") == 3
 
+    class ChatTokenizer:
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False,
+                                enable_thinking=False):
+            assert messages == [{"role": "user", "content": "prompt"}]
+            assert tokenize is False and add_generation_prompt is True and enable_thinking is True
+            return "<chat>prompt</chat>"
+
+        def __call__(self, text):
+            assert text == "<chat>prompt</chat>"
+            return {"input_ids": [list(range(42))]}
+
+        def encode(self, text, add_special_tokens=False):
+            raise AssertionError("chat template path must be used")
+
+    assert token_length(ChatTokenizer(), "prompt") == 42
+
+    class BrokenChat(FakeTokenizer):
+        def apply_chat_template(self, *args, **kwargs):
+            raise ValueError("no chat template")
+
+    assert token_length(BrokenChat(), "one two") == 2
+
     root = tmp_path / "data"
     write_case(root, "a", RAW, seed=1)
     report = prepare_dataset(root, tmp_path / "out", config(tokenizer="none"))

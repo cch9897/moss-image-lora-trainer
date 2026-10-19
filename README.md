@@ -123,7 +123,7 @@ moss-lora-export-comfy --adapter runs/moss_1m \
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | 只读实时看板：安装/启动、曲线与采样、状态/ETA、HTTP API、安全与 SSH 端口转发 |
 | [docs/5090.md](docs/5090.md) | 硬件基线、驱动/wheel 验证、显存规划、OOM 阶梯、性能开关、实测表 |
 | [docs/DATASET.md](docs/DATASET.md) | 数据目录、metadata.jsonl、layout JSON、caption 变体与质量规范 |
-| [docs/CAPTIONS.md](docs/CAPTIONS.md) | 原始 tag+prose 解析、混合画师 caption、单语言 prose、负向 tag 清理、文字/手部覆盖、分桶裁剪风险与报告字段 |
+| [docs/CAPTIONS.md](docs/CAPTIONS.md) | 原始 tag+prose 解析、混合画师 caption、单语言 prose、负向 tag 清理、文字/手部覆盖、分桶裁剪风险、OCR/bbox/layout 与报告字段 |
 | [docs/COMFYUI.md](docs/COMFYUI.md) | adapter 转换、ComfyUI 工作流接线、采样参数与排错 |
 | [docs/FAQ.md](docs/FAQ.md) | 常见问题与快速排查 |
 | [SECURITY.md](SECURITY.md) | 安全与隐私报告方式 |
