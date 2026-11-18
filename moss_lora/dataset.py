@@ -15,21 +15,72 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 LATENT_KEY = "latent"
 
 
+def item_variant_metadata(item: dict[str, Any]) -> tuple[list[str], list[float] | None]:
+    """Validated ``(variant_kinds, variant_weights)``; old indexes fall back uniform."""
+    lengths = item.get("text_lengths")
+    if not isinstance(lengths, list) or not lengths:
+        raise ValueError(f"Cache item {item.get('id')!r} has no text_lengths")
+    count = len(lengths)
+    caption_shas = item.get("caption_sha256")
+    if caption_shas is not None and len(caption_shas) != count:
+        raise ValueError(
+            f"Cache item {item.get('id')!r}: caption_sha256 has {len(caption_shas)} entries "
+            f"but text_lengths has {count}")
+    kinds = item.get("variant_kinds")
+    if kinds is None:
+        kinds = ["caption"] * count
+    if len(kinds) != count:
+        raise ValueError(
+            f"Cache item {item.get('id')!r}: variant_kinds has {len(kinds)} entries "
+            f"but text_lengths has {count}")
+    weights = item.get("variant_weights")
+    if weights is not None:
+        if len(weights) != count:
+            raise ValueError(
+                f"Cache item {item.get('id')!r}: variant_weights has {len(weights)} entries "
+                f"but text_lengths has {count}")
+        weights = [float(weight) for weight in weights]
+        if any(weight < 0 for weight in weights):
+            raise ValueError(f"Cache item {item.get('id')!r}: negative variant weight")
+        if abs(sum(weights) - 1.0) > 1e-6:
+            raise ValueError(
+                f"Cache item {item.get('id')!r}: variant weights sum to {sum(weights):.8f}, expected 1.0")
+    return list(kinds), weights
+
+
+def pick_variant(item: dict[str, Any], override: dict[str, float] | None = None
+                 ) -> tuple[int, str]:
+    """Pick one variant index/kind using per-item weights or a global override."""
+    kinds, weights = item_variant_metadata(item)
+    if override:
+        selected = [float(override.get(kind, 0.0)) for kind in kinds]
+        if any(weight < 0 for weight in selected):
+            raise ValueError("variant weight override must be non-negative")
+        weights = selected
+    if weights is None or sum(weights) <= 0:
+        weights = [1.0] * len(kinds)
+    index = random.choices(range(len(kinds)), weights=weights, k=1)[0]
+    return index, kinds[index]
+
+
 class CachedDataset(Dataset):
     """Reads one safetensors per item written by moss_lora.cache.
 
-    __getitem__ returns the fp32/bf16 latent plus one caption variant's text
-    embedding picked uniformly (the report's 1:1:1 short/medium/long sampling;
-    single-variant items always pick variant 0).
+    __getitem__ returns the latent plus one caption/layout variant's text
+    embedding. v2 indexes carry per-item ``variant_kinds``/``variant_weights``;
+    old indexes without them sample uniformly and report ``variant_kind="caption"``.
     """
 
-    def __init__(self, cache_dir: str | Path):
+    def __init__(self, cache_dir: str | Path, variant_weights: dict[str, float] | None = None):
         self.cache_dir = Path(cache_dir)
+        self.variant_weights = dict(variant_weights) if variant_weights else None
         index_path = self.cache_dir / "index.json"
         if not index_path.is_file():
             raise FileNotFoundError(f"Cache index not found: {index_path} (run moss-lora-cache first)")
         self.index = json.loads(index_path.read_text(encoding="utf-8"))
         self.items: list[dict[str, Any]] = self.index["items"]
+        for item in self.items:
+            item_variant_metadata(item)
 
     def __len__(self) -> int:
         return len(self.items)
@@ -41,15 +92,20 @@ class CachedDataset(Dataset):
         item = self.items[index]
         with safe_open(str(self.item_path(item)), framework="pt", device="cpu") as handle:
             latent = handle.get_tensor(LATENT_KEY)
-            variant = random.randrange(len(item["text_lengths"]))
+            variant, variant_kind = pick_variant(item, self.variant_weights)
             text = handle.get_tensor(f"text_{variant}")
         return {"latents": latent, "text": text, "id": item["id"],
-                "bucket": (item["bucket_h"], item["bucket_w"])}
+                "bucket": (item["bucket_h"], item["bucket_w"]),
+                "variant_kind": variant_kind}
 
     def text_embedding(self, item_id: str, variant: int = 0) -> torch.Tensor:
         """Deterministic access for validation sampling (variant 0 by default)."""
         for item in self.items:
             if item["id"] == item_id:
+                count = len(item["text_lengths"])
+                if not 0 <= variant < count:
+                    raise IndexError(
+                        f"Item {item_id!r} has {count} variants; requested variant {variant}")
                 with safe_open(str(self.item_path(item)), framework="pt", device="cpu") as handle:
                     return handle.get_tensor(f"text_{variant}")
         raise KeyError(f"Item {item_id!r} is not in the cache index.")
@@ -135,7 +191,8 @@ def collate_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
         texts[row, :item["text"].shape[0]] = item["text"]
         mask[row, :item["text"].shape[0]] = True
     return {"latents": latents, "text": texts, "mask": mask,
-            "ids": [item["id"] for item in batch]}
+            "ids": [item["id"] for item in batch],
+            "variant_kinds": [item.get("variant_kind", "caption") for item in batch]}
 
 
 def _seed_worker(worker_id: int) -> None:  # noqa: ARG001

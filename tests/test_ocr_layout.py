@@ -4,34 +4,43 @@ from __future__ import annotations
 
 import io
 import json
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
+from moss_lora import ocr as ocr_module
 from moss_lora.cache import caption_variants, collect_items, fit_image
 from moss_lora.ocr import (
     OCRError,
     OCRItem,
     OCRResult,
     _load_image,
+    _paddle_engine,
+    _run_paddle_engine,
+    _run_python_backend,
     _scale_items,
     backend_available,
     bucket_geometry,
     confidence_distribution,
+    cuda_provider_options,
     dedupe_ocr_items,
+    items_from_paddle_v3,
     items_from_rapidocr,
     layout_json,
     make_layout,
     parse_tesseract_tsv,
+    resolve_ocr_device,
     run_ocr,
     select_ocr_items,
     transform_box,
     transform_ocr_items,
 )
 from scripts import prepare_captions
-from scripts.prepare_captions import PrepareConfig, prepare_dataset
+from scripts.prepare_captions import PrepareConfig, PrepareError, prepare_dataset
 
 TEXT = "A quiet street at dusk with a clear sign and a raised hand."
 
@@ -255,12 +264,14 @@ def test_ocr_output_is_consumable_by_cache_and_variants(tmp_path, monkeypatch):
     items = collect_items(output)
     assert len(items) == 1
     variants = caption_variants(items[0][1])
-    assert len(variants) == 3
-    layout = json.loads(variants[0])
+    assert len(variants) >= 3  # deduped prose variants + separate layout
+    layout_text = next(value for value in variants if value.lstrip().startswith("{"))
+    layout = json.loads(layout_text)
     assert layout["bbox_format"] == "yxyx"
     assert "artist:alice" in layout["summary"]["caption"]
-    assert "artist:alice" in variants[1]
-    assert "artist:alice" in variants[2]
+    for value in variants:
+        if value != layout_text:
+            assert "artist:alice" in value
 
 
 def test_layout_token_budget_shortens_and_reports(tmp_path, monkeypatch):
@@ -303,9 +314,292 @@ def test_no_ocr_keeps_existing_behavior(tmp_path):
     root = tmp_path / "data"
     write_case(root)
     output = tmp_path / "out"
-    report = prepare_dataset(root, output, PrepareConfig(tokenizer="none", target_area=256 * 256))
+    report = prepare_dataset(root, output, PrepareConfig(tokenizer="none", target_area=256 * 256,
+                                                         trigger="@h"))
     row = load_row(output)
     assert "layout" not in row
     assert not row["caption"]["long"].startswith("{")
     assert report["ocr"]["backend"] == "none"
     assert report["layout"]["images"] == 0
+    readme = (output / "README.md").read_text(encoding="utf-8")
+    assert "`@h`" in readme  # configured trigger
+    assert "metadata.jsonl" in readme and "caption_no_artist" in readme
+    assert "ocr_low_confidence" in readme
+
+
+def test_force_replaces_readme(tmp_path):
+    root = tmp_path / "data"
+    write_case(root)
+    output = tmp_path / "out"
+    prepare_dataset(root, output, PrepareConfig(tokenizer="none", target_area=256 * 256))
+    stale = output / "README.md"
+    stale.write_text("stale", encoding="utf-8")
+    prepare_dataset(root, output, PrepareConfig(tokenizer="none", target_area=256 * 256, force=True))
+    assert stale.read_text(encoding="utf-8") != "stale"
+
+
+# --------------------------------------------------------------------------- paddle backend
+
+
+def test_items_from_paddle_v3_reads_polys_scores_and_boxes():
+    page = {
+        "rec_texts": ["EXIT", "", "STOP"],
+        "rec_scores": [0.91, 0.5, 0.77],
+        "rec_polys": np.array([[[10, 20], [60, 20], [60, 40], [10, 40]],
+                               [[0, 0], [1, 1], [2, 2], [3, 3]],
+                               [[5, 5], [25, 5], [25, 15], [5, 15]]], dtype=float),
+    }
+    items = items_from_paddle_v3([page])
+    assert [item.text for item in items] == ["EXIT", "STOP"]
+    assert items[0].box == (10.0, 20.0, 60.0, 40.0)
+    assert items[0].confidence == pytest.approx(0.91)
+    # Empty text is dropped, and a page with only rec_boxes still yields a usable box.
+    boxes_only = {"rec_texts": ["gate"], "rec_scores": [0.6], "rec_polys": None,
+                  "rec_boxes": np.array([[4, 6, 30, 18]], dtype=float)}
+    assert items_from_paddle_v3([boxes_only])[0].box == (4.0, 6.0, 30.0, 18.0)
+    assert items_from_paddle_v3([]) == []
+    assert items_from_paddle_v3([{"rec_texts": ["x"]}]) == []
+
+
+def test_run_paddle_engine_prefers_predict_over_legacy_ocr():
+    class Engine:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def predict(self, array):
+            self.calls.append("predict")
+            polys = [[[1, 1], [9, 1], [9, 5], [1, 5]]]
+            return [{"rec_texts": ["hi"], "rec_scores": [0.8], "rec_polys": polys}]
+
+        def ocr(self, array, **kwargs):  # pragma: no cover - must not be called
+            raise AssertionError("legacy ocr() must not run when predict() exists")
+
+    engine = Engine()
+    items = _run_paddle_engine(engine, np.zeros((8, 8, 3), dtype=np.uint8))
+    assert engine.calls == ["predict"]
+    assert [item.text for item in items] == ["hi"]
+
+
+def test_paddle_engine_requests_onnxruntime_and_reports_engine(monkeypatch):
+    built: dict[str, object] = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+        def predict(self, array):  # pragma: no cover - parser covered elsewhere
+            return []
+
+    fake_module = types.ModuleType("paddleocr")
+    fake_module.PaddleOCR = FakePaddleOCR
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+    _paddle_engine.cache_clear()
+    engine, kind = _paddle_engine("ch", "gpu")
+    assert isinstance(engine, FakePaddleOCR)
+    assert kind == "onnxruntime"
+    assert built["engine"] == "onnxruntime"
+    assert built["device"] == "gpu"
+    assert built["lang"] == "ch"
+    assert built["use_doc_unwarping"] is False
+    config_sent = built["engine_config"]
+    assert config_sent["device_type"] == "gpu"
+    options = config_sent["provider_options"][0]
+    assert options["cudnn_conv_algo_search"] == "HEURISTIC"
+    _paddle_engine.cache_clear()
+    _paddle_engine("ch", "cpu")
+    assert "provider_options" not in built["engine_config"]
+    assert built["engine_config"]["device_type"] == "cpu"
+    _paddle_engine.cache_clear()
+
+
+def test_paddle_engine_falls_back_to_legacy_paddleocr(monkeypatch):
+    class LegacyPaddleOCR:
+        def __init__(self, *, lang, use_gpu, show_log):
+            self.lang, self.use_gpu, self.show_log = lang, use_gpu, show_log
+
+        def ocr(self, array, cls=True):  # noqa: ARG002 - legacy signature
+            return [[[[[1, 1], [5, 1], [5, 4], [1, 4]], ("ok", 0.7)]]]
+
+    fake_module = types.ModuleType("paddleocr")
+    fake_module.PaddleOCR = LegacyPaddleOCR
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+    _paddle_engine.cache_clear()
+    engine, kind = _paddle_engine("ch", "cpu")
+    assert isinstance(engine, LegacyPaddleOCR)
+    assert kind == "paddle"
+    assert engine.use_gpu is False
+    items = _run_paddle_engine(engine, np.zeros((8, 8, 3), dtype=np.uint8))
+    assert [item.text for item in items] == ["ok"]
+    _paddle_engine.cache_clear()
+
+
+def test_resolve_ocr_device_uses_cuda_provider(monkeypatch):
+    monkeypatch.setattr(ocr_module, "runtime_providers",
+                        lambda: {"available": True, "version": "1.2.3",
+                                 "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"]})
+    assert resolve_ocr_device("paddle", "gpu") == "gpu"
+    assert resolve_ocr_device("rapidocr", "gpu") == "cuda"
+    assert resolve_ocr_device("paddle", "auto") == "gpu"
+    monkeypatch.setattr(ocr_module, "runtime_providers",
+                        lambda: {"available": True, "version": "1.2.3",
+                                 "providers": ["CPUExecutionProvider"]})
+    assert resolve_ocr_device("paddle", "gpu") == "cpu"
+    assert resolve_ocr_device("rapidocr", "auto") == "cpu"
+    assert resolve_ocr_device("paddle", "cpu") == "cpu"
+    assert resolve_ocr_device("none", "gpu") == "cpu"
+    with pytest.raises(OCRError):
+        resolve_ocr_device("paddle", "tpu")
+
+
+def test_run_ocr_forwards_device_and_records_engine(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def fake_backend(image, backend, languages, device, det_side=None, gpu_mem_limit_mib=0):  # noqa: ARG001
+        seen["device"] = device
+        seen["det_side"] = det_side
+        seen["gpu_mem_limit_mib"] = gpu_mem_limit_mib
+        return [OCRItem("EXIT", 0.9, (10, 10, 100, 50))], "onnxruntime"
+
+    monkeypatch.setattr(ocr_module, "_run_python_backend", fake_backend)
+    monkeypatch.setattr(ocr_module, "backend_available", lambda backend: True)
+    monkeypatch.setattr(ocr_module, "runtime_providers",
+                        lambda: {"available": True, "version": "1.2.3",
+                                 "providers": ["CUDAExecutionProvider"]})
+    result = run_ocr(Image.new("RGB", (64, 64)), backend="paddle", languages="ch_sim+en",
+                     device="gpu", min_confidence=0.5, det_side=1024, gpu_mem_limit_mib=5120)
+    assert seen["device"] == "gpu"
+    assert seen["det_side"] == 1024
+    assert seen["gpu_mem_limit_mib"] == 5120
+    assert result.device == "gpu" and result.engine == "onnxruntime"
+    assert [item.text for item in result.items] == ["EXIT"]
+
+
+def test_paddle_backend_sends_bgr_to_engine(monkeypatch):
+    captured: dict[str, np.ndarray] = {}
+
+    class Engine:
+        def predict(self, array):
+            captured["array"] = array
+            return []
+
+    monkeypatch.setattr(ocr_module, "_paddle_engine",
+                        lambda language, device, limit=0: (Engine(), "onnxruntime"))
+    image = Image.new("RGB", (4, 4))
+    image.putdata([(10, 20, 30)] * 16)
+    items, engine = _run_python_backend(image, "paddle", ["ch_sim", "en"], "cpu")
+    assert items == [] and engine == "onnxruntime"
+    array = captured["array"]
+    assert array.flags["C_CONTIGUOUS"]
+    assert array[0, 0].tolist() == [30, 20, 10]  # BGR: blue first for PaddleX
+
+
+def test_run_ocr_keeps_low_confidence_boxes_for_review(monkeypatch):
+    monkeypatch.setattr(ocr_module, "backend_available", lambda backend: True)
+
+    def fake_backend(image, backend, languages, device, det_side=None, gpu_mem_limit_mib=0):  # noqa: ARG001
+        items = [OCRItem("EXIT", 0.92, (10, 10, 20, 20)), OCRItem("blurry", 0.30, (4, 6, 8, 12))]
+        return items, "onnxruntime"
+
+    monkeypatch.setattr(ocr_module, "_run_python_backend", fake_backend)
+    result = run_ocr(Image.new("RGB", (64, 64)), backend="paddle", min_confidence=0.5, max_side=32,
+                     det_side=1536)
+    assert [item.text for item in result.items] == ["EXIT"]
+    assert [item.text for item in result.low_confidence] == ["blurry"]
+    assert result.low_confidence_dropped == 1
+    # Review boxes are mapped back to source pixels exactly like caption boxes.
+    assert result.low_confidence[0].box == (8.0, 12.0, 16.0, 24.0)
+    assert result.raw_count == 1
+
+
+def test_low_confidence_boxes_reach_row_and_report(tmp_path, monkeypatch):
+    root = tmp_path / "data"
+    write_case(root)
+    output = tmp_path / "out"
+    monkeypatch.setattr(prepare_captions, "backend_available", lambda backend: True)
+
+    def ocr(image, **kwargs):  # noqa: ARG001
+        items = [OCRItem("EXIT", 0.9, (10, 10, 100, 50))]
+        low = [OCRItem("dim", 0.31, (10, 60, 100, 90))]
+        return OCRResult(items=items, raw_count=1, deduped=0, truncated=0, device="cpu",
+                         backend="paddle", engine="onnxruntime",
+                         low_confidence=low, low_confidence_dropped=2)
+
+    monkeypatch.setattr(prepare_captions, "run_ocr", ocr)
+    report = prepare_dataset(root, output, config(ocr="paddle"))
+    row = load_row(output)
+    assert row["ocr_low_confidence"]["count"] == 2
+    assert [entry["text"] for entry in row["ocr_low_confidence"]["items"]] == ["dim"]
+    assert row["ocr_low_confidence"]["items"][0]["confidence"] == 0.31
+    assert len(row["ocr_low_confidence"]["items"][0]["bbox"]) == 4
+    assert report["ocr"]["low_confidence"]["boxes"] == 1
+    assert report["ocr"]["low_confidence"]["images"] == 1
+    assert report["ocr"]["low_confidence"]["confidence"]["count"] == 1
+    # The review box must not leak into the trained layout or caption text.
+    assert all(item["text"] != "dim" for item in row["layout"]["items"])
+    assert "dim" not in row["caption"]["long"]
+    assert "dim" not in row["caption"]["medium"]
+
+
+def test_cuda_provider_options_adds_vram_cap():
+    assert cuda_provider_options()[0] == {"cudnn_conv_algo_search": "HEURISTIC"}
+    capped = cuda_provider_options(5120)[0]
+    assert capped["gpu_mem_limit"] == 5120 * 1024 * 1024
+    assert capped["cudnn_conv_algo_search"] == "HEURISTIC"
+    assert cuda_provider_options(5120)[1] == {}
+
+
+def test_paddle_engine_receives_vram_cap(monkeypatch):
+    built: dict[str, object] = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+    fake_module = types.ModuleType("paddleocr")
+    fake_module.PaddleOCR = FakePaddleOCR
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+    _paddle_engine.cache_clear()
+    _paddle_engine("ch", "gpu", 5120)
+    options = built["engine_config"]["provider_options"][0]
+    assert options["gpu_mem_limit"] == 5120 * 1024 * 1024
+    _paddle_engine.cache_clear()
+
+
+def test_paddle_engine_caps_detection_side_when_requested():
+    captured: dict[str, object] = {}
+
+    class Engine:
+        def predict(self, array, **kwargs):
+            captured["kwargs"] = kwargs
+            return []
+
+    engine = Engine()
+    assert _run_paddle_engine(engine, np.zeros((8, 8, 3), dtype=np.uint8)) == []
+    assert captured["kwargs"] == {}
+    _run_paddle_engine(engine, np.zeros((8, 8, 3), dtype=np.uint8), det_side=1536)
+    assert captured["kwargs"] == {"text_det_limit_side_len": 1536, "text_det_limit_type": "max"}
+
+
+def test_report_records_engine_device_and_providers(tmp_path, monkeypatch):
+    root = tmp_path / "data"
+    write_case(root)
+    output = tmp_path / "out"
+    monkeypatch.setattr(prepare_captions, "backend_available", lambda backend: True)
+
+    def engine_ocr(image, **kwargs):  # noqa: ARG001
+        items = [OCRItem("EXIT", 0.9, (10, 10, 100, 50))]
+        return OCRResult(items=items, raw_count=1, deduped=0, truncated=0,
+                         device="gpu", backend="paddle", engine="onnxruntime")
+
+    monkeypatch.setattr(prepare_captions, "run_ocr", engine_ocr)
+    providers = {"available": True, "version": "1.23.2", "providers": ["CUDAExecutionProvider"]}
+    monkeypatch.setattr(ocr_module, "runtime_providers", lambda: providers)
+    monkeypatch.setattr(prepare_captions, "runtime_providers", lambda: providers)
+    report = prepare_dataset(root, output, config(ocr="paddle", ocr_device="gpu"))
+    assert report["ocr"]["engine"] == "onnxruntime"
+    assert report["ocr"]["device"] == "gpu"
+    assert report["ocr"]["device_requested"] == "gpu"
+    assert report["ocr"]["onnxruntime"]["providers"] == ["CUDAExecutionProvider"]
+    assert "providers" in (output / "report.md").read_text(encoding="utf-8")
+    with pytest.raises(PrepareError):
+        prepare_dataset(root, output, config(ocr="paddle", ocr_device="tpu", force=True))

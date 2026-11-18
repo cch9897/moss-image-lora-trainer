@@ -229,17 +229,29 @@ class MetricsLogger:
     def __init__(self, path: str | os.PathLike, console: bool = True):
         self.path = Path(path)
         self.console = console
+        self._fieldnames: list[str] | None = None
         self._header_written = self.path.exists() and self.path.stat().st_size > 0
+        if self._header_written:
+            with open(self.path, newline="", encoding="utf-8") as handle:
+                header = next(csv.reader(handle), None)
+            if header:
+                self._fieldnames = list(header)
 
     def log(self, row: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         new_file = not self._header_written
+        if new_file or self._fieldnames is None:
+            self._fieldnames = list(row)
+        fieldnames = self._fieldnames
+        # Resumed runs may carry an older header: fill missing columns and drop
+        # newly added metrics instead of failing on DictWriter's strict schema.
+        payload = {name: row.get(name, "") for name in fieldnames}
         with open(self.path, "a", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(row))
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
             if new_file:
                 writer.writeheader()
                 self._header_written = True
-            writer.writerow(row)
+            writer.writerow(payload)
         if self.console:
             print(
                 f"[step {row.get('step', '?')}] "

@@ -1,0 +1,1574 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="referrer" content="no-referrer">
+<title>MOSS-Image · layout review</title>
+<style>
+  :root {
+    --bg: #0e1214;
+    --panel: #151b1f;
+    --panel-2: #1b2328;
+    --panel-3: #222c31;
+    --line: #2a353b;
+    --line-strong: #3d4c54;
+    --ink: #e8eef1;
+    --muted: #92a2aa;
+    --faint: #66757d;
+    --hot: #ff7a59;
+    --hot-soft: rgba(255, 122, 89, .14);
+    --cyan: #63d2ff;
+    --cyan-soft: rgba(99, 210, 255, .14);
+    --ok: #78d98d;
+    --warn: #f0c05a;
+    --danger: #ff7182;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SFMono-Regular", "SF Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    --header: 64px;
+    --radius: 8px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 500px at 18% -8%, rgba(99, 210, 255, .07), transparent 60%),
+      radial-gradient(900px 480px at 92% 0%, rgba(255, 122, 89, .06), transparent 62%),
+      var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  button, input, textarea, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+  .hidden { display: none !important; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .skip {
+    position: fixed; left: 12px; top: -60px; z-index: 80; background: var(--ink);
+    color: var(--bg); padding: 9px 14px; font: 12px var(--mono); text-decoration: none;
+  }
+  .skip:focus { top: 12px; }
+
+  .topbar {
+    height: var(--header);
+    display: grid;
+    grid-template-columns: minmax(230px, 1fr) auto minmax(300px, 1fr);
+    align-items: center;
+    gap: 18px;
+    padding: 0 18px;
+    background: rgba(14, 18, 20, .92);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(10px);
+    position: relative;
+    z-index: 30;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .brand-mark {
+    width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center;
+    background: linear-gradient(145deg, var(--hot), #c94831); color: #160b08;
+    border-radius: 7px; font: 800 16px/1 var(--mono); letter-spacing: -.06em;
+    box-shadow: inset 0 1px rgba(255,255,255,.3);
+  }
+  .brand-copy { min-width: 0; }
+  .brand-title { font-size: 13px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+  .brand-sub {
+    color: var(--muted); font: 11px var(--mono); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: 34vw;
+  }
+
+  .filters {
+    display: flex; padding: 3px; gap: 3px; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  .filter-btn {
+    border: 0; background: transparent; color: var(--muted); padding: 6px 13px;
+    border-radius: 5px; font-size: 12px; font-weight: 650; white-space: nowrap;
+  }
+  .filter-btn[aria-pressed="true"] { background: var(--panel-3); color: var(--ink); }
+  .filter-btn:hover { color: var(--ink); }
+
+  .header-right { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+  .pos {
+    font: 11px var(--mono); color: var(--muted); padding: 6px 9px;
+    border: 1px solid var(--line); border-radius: 6px; white-space: nowrap;
+  }
+  .queue-pill {
+    font: 11px var(--mono); color: var(--warn); background: rgba(240, 192, 90, .09);
+    border: 1px solid rgba(240, 192, 90, .28); border-radius: 999px; padding: 5px 10px;
+    white-space: nowrap;
+  }
+  .btn {
+    border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--ink);
+    border-radius: 6px; padding: 7px 12px; font-size: 12px; font-weight: 650;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .btn:hover { background: var(--panel-3); border-color: #52646d; }
+  .btn.primary { background: var(--hot); border-color: var(--hot); color: #1a0b07; }
+  .btn.primary:hover { background: #ff8c6f; }
+  .btn.ghost { background: transparent; }
+  .btn.danger { color: var(--danger); border-color: rgba(255, 113, 130, .35); }
+  .btn.danger:hover { background: rgba(255, 113, 130, .12); }
+  .btn:disabled { opacity: .38; cursor: not-allowed; }
+  .save-status {
+    font: 11px var(--mono); color: var(--muted); min-width: 128px; max-width: 220px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right;
+  }
+  .save-status.saved { color: var(--ok); }
+  .save-status.dirty, .save-status.saving { color: var(--warn); }
+  .save-status.error { color: var(--danger); }
+
+  .workspace {
+    height: calc(100vh - var(--header));
+    display: grid;
+    grid-template-columns: 304px minmax(0, 1fr) 372px;
+    gap: 0;
+    min-height: 0;
+  }
+  .panel { min-height: 0; background: var(--panel); }
+  .queue-panel {
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .editor-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .inspector {
+    border-left: 1px solid var(--line);
+    overflow-y: auto; min-height: 0; scrollbar-width: thin;
+  }
+
+  .queue-head { padding: 14px 14px 10px; border-bottom: 1px solid var(--line); }
+  .section-kicker {
+    font: 10px var(--mono); letter-spacing: .13em; text-transform: uppercase;
+    color: var(--faint); margin-bottom: 8px;
+  }
+  .stats-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px;
+  }
+  .stat {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
+    padding: 7px 9px; min-width: 0;
+  }
+  .stat-label { font: 9px var(--mono); text-transform: uppercase; letter-spacing: .09em; color: var(--faint); }
+  .stat-value { font-size: 17px; font-weight: 720; line-height: 1.2; }
+  .stat-value small { font-size: 11px; font-weight: 500; color: var(--muted); }
+  .progress-track {
+    height: 4px; background: var(--panel-3); border-radius: 999px; overflow: hidden;
+    margin: 0 0 11px;
+  }
+  .progress-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--cyan), var(--ok)); }
+  .search-wrap { position: relative; }
+  .search-wrap input {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 10px 8px 30px; font-size: 12px; color: var(--ink);
+  }
+  .search-wrap input::placeholder { color: var(--faint); }
+  .search-icon {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--faint); font: 13px var(--mono); pointer-events: none;
+  }
+  .list-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 14px 7px; color: var(--muted); font: 10px var(--mono);
+    letter-spacing: .07em; text-transform: uppercase;
+  }
+  .item-list { flex: 1; overflow-y: auto; padding: 0 8px 16px; scrollbar-width: thin; }
+  .queue-row {
+    width: 100%; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto;
+    grid-template-rows: auto auto; gap: 1px 8px; align-items: center;
+    text-align: left; border: 1px solid transparent; background: transparent;
+    border-radius: 7px; padding: 7px 8px; margin-bottom: 2px;
+  }
+  .queue-row:hover { background: var(--panel-2); }
+  .queue-row.current {
+    background: var(--panel-2); border-color: var(--line-strong);
+    box-shadow: inset 2px 0 var(--hot);
+  }
+  .qi {
+    grid-row: 1 / span 2; font: 10px var(--mono); color: var(--faint);
+    align-self: start; padding-top: 2px;
+  }
+  .qname {
+    font-size: 12px; font-weight: 620; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .qmeta {
+    font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .qstate {
+    grid-column: 3; grid-row: 1 / span 2; display: flex; flex-direction: column;
+    align-items: flex-end; gap: 3px;
+  }
+  .status-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--warn);
+    box-shadow: 0 0 0 3px rgba(240, 192, 90, .09);
+  }
+  .status-dot.edited { background: var(--cyan); box-shadow: 0 0 0 3px var(--cyan-soft); }
+  .status-dot.reviewed { background: var(--ok); box-shadow: 0 0 0 3px rgba(120, 217, 141, .1); }
+  .status-dot.no_text { background: var(--muted); box-shadow: none; }
+  .status-text { font: 9px var(--mono); color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+  .empty-list { color: var(--muted); padding: 18px 12px; font-size: 12px; line-height: 1.6; }
+
+  .meta-strip {
+    min-height: 43px; display: flex; align-items: center; gap: 8px;
+    padding: 7px 14px; border-bottom: 1px solid var(--line); background: var(--panel);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .meta-strip::-webkit-scrollbar { display: none; }
+  .meta-item {
+    font: 10px var(--mono); color: var(--muted); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px; white-space: nowrap;
+  }
+  .meta-item strong { color: var(--ink); font-weight: 650; }
+  .chip {
+    font: 10px var(--mono); padding: 4px 8px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid var(--line-strong); color: var(--muted);
+  }
+  .chip.hot { color: var(--hot); border-color: rgba(255, 122, 89, .4); background: var(--hot-soft); }
+  .chip.ok { color: var(--ok); border-color: rgba(120, 217, 141, .35); background: rgba(120, 217, 141, .08); }
+  .chip.warn { color: var(--warn); border-color: rgba(240, 192, 90, .35); background: rgba(240, 192, 90, .07); }
+
+  .viewport {
+    flex: 1; min-height: 0; position: relative; display: flex; align-items: center;
+    justify-content: center; padding: 20px; overflow: auto; scrollbar-width: thin;
+    background-image:
+      linear-gradient(rgba(255,255,255,.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.022) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  .image-frame {
+    position: relative; display: inline-block; line-height: 0; max-width: 100%;
+    box-shadow: 0 18px 55px rgba(0,0,0,.52), 0 0 0 1px #000;
+    background: #080a0b;
+  }
+  .image-frame img {
+    display: block; max-width: 100%; max-height: calc(100vh - var(--header) - 116px);
+    width: auto; height: auto; user-select: none; -webkit-user-drag: none;
+  }
+  .layer {
+    position: absolute; inset: 0; cursor: crosshair; touch-action: none;
+    user-select: none;
+  }
+  .draft {
+    position: absolute; border: 1.5px dashed var(--cyan); background: var(--cyan-soft);
+    pointer-events: none;
+  }
+  .bbox {
+    position: absolute; border: 2px solid var(--hot); background: var(--hot-soft);
+    cursor: move; min-width: 2px; min-height: 2px; touch-action: none;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.42);
+  }
+  .bbox:hover { border-color: #ff9d84; }
+  .bbox.selected {
+    border-color: var(--cyan); background: var(--cyan-soft); z-index: 5;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.65), 0 0 22px rgba(99, 210, 255, .2);
+  }
+  .bbox-badge {
+    position: absolute; left: -2px; top: -20px; height: 18px; min-width: 18px;
+    padding: 0 4px; display: grid; place-items: center; background: var(--hot);
+    color: #1c0a06; font: 700 10px/1 var(--mono); border-radius: 3px 3px 0 0;
+    pointer-events: none; white-space: nowrap;
+  }
+  .bbox.selected .bbox-badge { background: var(--cyan); }
+  .bbox-text {
+    position: absolute; left: 0; bottom: 0; max-width: 100%; padding: 2px 4px;
+    background: rgba(8, 10, 11, .78); color: var(--ink); font: 10px/1.3 var(--mono);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+  }
+  .handle {
+    position: absolute; width: 9px; height: 9px; background: var(--cyan);
+    border: 1px solid #08212b; border-radius: 2px; display: none;
+  }
+  .bbox.selected .handle { display: block; }
+  .handle[data-handle="nw"] { left: -6px; top: -6px; cursor: nwse-resize; }
+  .handle[data-handle="n"]  { left: calc(50% - 4.5px); top: -6px; cursor: ns-resize; }
+  .handle[data-handle="ne"] { right: -6px; top: -6px; cursor: nesw-resize; }
+  .handle[data-handle="e"]  { right: -6px; top: calc(50% - 4.5px); cursor: ew-resize; }
+  .handle[data-handle="se"] { right: -6px; bottom: -6px; cursor: nwse-resize; }
+  .handle[data-handle="s"]  { left: calc(50% - 4.5px); bottom: -6px; cursor: ns-resize; }
+  .handle[data-handle="sw"] { left: -6px; bottom: -6px; cursor: nesw-resize; }
+  .handle[data-handle="w"]  { left: -6px; top: calc(50% - 4.5px); cursor: ew-resize; }
+
+  .editor-empty {
+    max-width: 420px; text-align: center; color: var(--muted); padding: 28px;
+  }
+  .editor-empty strong { display: block; color: var(--ink); font-size: 16px; margin-bottom: 7px; }
+  .toolbar {
+    min-height: 54px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+    padding: 9px 14px; border-top: 1px solid var(--line); background: var(--panel);
+  }
+  .shortcuts {
+    margin-left: auto; color: var(--faint); font: 10px var(--mono); white-space: nowrap;
+  }
+  kbd {
+    font: 10px var(--mono); background: var(--panel-3); border: 1px solid var(--line-strong);
+    border-bottom-width: 2px; border-radius: 4px; padding: 1px 4px; color: var(--muted);
+  }
+
+  .panel-section { padding: 14px; border-bottom: 1px solid var(--line); }
+  .section-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 8px; margin-bottom: 10px;
+  }
+  .section-head h2 {
+    margin: 0; font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); font-weight: 650;
+  }
+  .section-count { font: 10px var(--mono); color: var(--faint); }
+  .hint { color: var(--muted); font-size: 12px; line-height: 1.55; }
+  .box-form label { display: block; margin-bottom: 9px; }
+  .box-form .label-text {
+    display: block; font: 10px var(--mono); color: var(--faint); text-transform: uppercase;
+    letter-spacing: .08em; margin-bottom: 4px;
+  }
+  textarea, .num-input, .box-form select {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 8px; color: var(--ink); font-size: 13px;
+  }
+  textarea { resize: vertical; min-height: 58px; font-family: var(--sans); }
+  textarea:focus, .num-input:focus { border-color: var(--cyan); outline: none; box-shadow: 0 0 0 2px var(--cyan-soft); }
+  .coord-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
+  .coord-grid .num-input { padding: 6px; font: 11px var(--mono); }
+  .coord-label { font: 9px var(--mono); color: var(--faint); text-transform: uppercase; }
+  .form-actions { display: flex; gap: 6px; }
+  .box-list { list-style: none; margin: 0; padding: 0; max-height: 168px; overflow-y: auto; scrollbar-width: thin; }
+  .box-row {
+    width: 100%; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 6px;
+    text-align: left; border: 1px solid transparent; background: transparent;
+    color: var(--ink); border-radius: 5px; padding: 5px;
+  }
+  .box-row:hover { background: var(--panel-2); }
+  .box-row.current { border-color: var(--line-strong); background: var(--panel-2); }
+  .box-row .bn { font: 10px var(--mono); color: var(--hot); padding-top: 1px; }
+  .box-row .bt {
+    font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--muted);
+  }
+  .suggestion-list { display: flex; flex-wrap: wrap; gap: 5px; }
+  .suggestion {
+    max-width: 100%; display: inline-flex; align-items: center; gap: 5px;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+    border-radius: 5px; padding: 4px 7px; font-size: 11px; text-align: left;
+  }
+  .suggestion:hover { border-color: var(--cyan); }
+  .suggestion.used { opacity: .62; border-style: dashed; }
+  .suggestion .stext {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 205px;
+  }
+  .suggestion .ssrc { font: 8px var(--mono); color: var(--faint); text-transform: uppercase; }
+  .source-grid { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 4px 8px; font-size: 12px; }
+  .source-grid dt { color: var(--faint); font: 10px var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+  .source-grid dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+  .prose {
+    margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6;
+    max-height: 210px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+    border-left: 2px solid var(--line); padding-left: 9px;
+  }
+  details { margin-top: 9px; }
+  summary {
+    cursor: pointer; color: var(--muted); font: 10px var(--mono); text-transform: uppercase;
+    letter-spacing: .07em;
+  }
+  details p { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .issue { color: var(--warn); font-size: 11px; margin-top: 7px; }
+
+  .toast {
+    position: fixed; right: 18px; bottom: 18px; z-index: 100; max-width: min(440px, 90vw);
+    background: #20292e; border: 1px solid var(--line-strong); border-left: 3px solid var(--cyan);
+    border-radius: 7px; padding: 10px 13px; color: var(--ink); font-size: 12px;
+    box-shadow: 0 16px 45px rgba(0,0,0,.5); line-height: 1.45;
+  }
+  .toast.error { border-left-color: var(--danger); }
+  .toast.ok { border-left-color: var(--ok); }
+
+  @media (max-width: 1240px) {
+    .workspace { grid-template-columns: 270px minmax(0, 1fr) 330px; }
+    .brand-sub { max-width: 24vw; }
+  }
+  @media (max-width: 1020px) {
+    body { overflow: auto; }
+    .workspace { height: auto; grid-template-columns: 250px minmax(0, 1fr); }
+    .inspector {
+      grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr;
+      border-left: 0; border-top: 1px solid var(--line); overflow: visible;
+    }
+    .panel-section { border-bottom: 0; border-right: 1px solid var(--line); }
+    .editor-panel { min-height: 70vh; }
+    .viewport { min-height: 52vh; }
+    .queue-panel { max-height: calc(100vh - var(--header)); position: sticky; top: var(--header); }
+    .header-right .pos { display: none; }
+  }
+  @media (max-width: 720px) {
+    :root { --header: auto; }
+    .topbar {
+      position: static; height: auto; padding: 10px 12px;
+      grid-template-columns: 1fr auto; grid-template-areas: "brand actions" "filters filters";
+      gap: 8px;
+    }
+    .brand { grid-area: brand; }
+    .filters { grid-area: filters; justify-self: start; }
+    .header-right { grid-area: actions; }
+    .header-right .queue-pill { display: none; }
+    .save-status { min-width: 0; max-width: 120px; }
+    .workspace { display: block; }
+    .queue-panel { position: static; max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    .editor-panel { min-height: 60vh; }
+    .image-frame img { max-height: 52vh; }
+    .inspector { display: block; }
+    .panel-section { border-right: 0; border-bottom: 1px solid var(--line); }
+    .toolbar { padding: 8px 10px; }
+    .shortcuts { display: none; }
+    .viewport { padding: 10px; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#viewport">Skip to editor</a>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">M</div>
+    <div class="brand-copy">
+      <div class="brand-title">Layout review</div>
+      <div class="brand-sub" id="sourceFile" title="Source metadata">metadata.jsonl</div>
+    </div>
+  </div>
+
+  <div class="filters" role="group" aria-label="Review queue filter">
+    <button type="button" class="filter-btn" data-filter="text" aria-pressed="true">Text queue</button>
+    <button type="button" class="filter-btn" data-filter="all" aria-pressed="false">All images</button>
+  </div>
+
+  <div class="header-right">
+    <span class="pos" id="itemPosition"># — / —</span>
+    <span class="queue-pill" id="queueBadge">Queue —</span>
+    <button type="button" class="btn ghost" id="prevBtn" title="Previous item (p)" aria-label="Previous item">←</button>
+    <button type="button" class="btn ghost" id="nextBtn" title="Next item (n)" aria-label="Next item">→</button>
+    <button type="button" class="btn primary" id="saveBtn" title="Save (s)">Save</button>
+    <span class="save-status" id="saveStatus" role="status" aria-live="polite">Ready</span>
+  </div>
+</header>
+
+<main class="workspace">
+  <aside class="panel queue-panel" aria-label="Review queue">
+    <div class="queue-head">
+      <div class="section-kicker">Review progress</div>
+      <div class="stats-grid">
+        <div class="stat"><div class="stat-label">Remaining</div><div class="stat-value" id="statRemaining">—</div></div>
+        <div class="stat"><div class="stat-label">Queue</div><div class="stat-value" id="statQueue">—</div></div>
+        <div class="stat"><div class="stat-label">No layout</div><div class="stat-value" id="statMissing">—</div></div>
+        <div class="stat"><div class="stat-label">Done</div><div class="stat-value" id="statDone">—</div></div>
+      </div>
+      <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="search-wrap">
+        <span class="search-icon" aria-hidden="true">/</span>
+        <label class="sr-only" for="searchInput">Search queue</label>
+        <input id="searchInput" type="search" placeholder="Search file, artist, tag, caption" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="list-head"><span>Items</span><span id="listCount">—</span></div>
+    <div class="item-list" id="itemList" role="list"></div>
+  </aside>
+
+  <section class="panel editor-panel" id="editorPanel" aria-label="Image editor">
+    <div class="meta-strip" id="metaStrip">
+      <span class="meta-item" id="metaIndex">#—</span>
+      <span class="meta-item" id="metaArtist">artist —</span>
+      <span class="meta-item" id="metaCharacters">character —</span>
+      <span class="meta-item" id="metaBucket">bucket —</span>
+      <span class="meta-item" id="metaCrop">crop —</span>
+      <span class="meta-item" id="metaSource">source —</span>
+      <span class="chip" id="metaStatus">not loaded</span>
+      <span class="chip hot hidden" id="metaNoText">no text</span>
+      <span class="chip warn hidden" id="metaInvalid">invalid boxes</span>
+    </div>
+
+    <div class="viewport" id="viewport">
+      <div class="editor-empty" id="editorEmpty">
+        <strong>Loading review queue</strong>
+        <span>Images are served in exact training-bucket geometry. No model or GPU is used.</span>
+      </div>
+      <div class="image-frame hidden" id="imageFrame">
+        <img id="image" alt="" draggable="false">
+        <div class="layer" id="layer" aria-label="Text box editor"></div>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <button type="button" class="btn" id="addBoxBtn" title="Add a box at the center">+ Add box</button>
+      <button type="button" class="btn danger" id="deleteBoxBtn" title="Delete selected box (d)">Delete box</button>
+      <button type="button" class="btn" id="noTextBtn" title="Clear layout and restore prose caption">Mark no text</button>
+      <span class="shortcuts"><kbd>n</kbd>/<kbd>p</kbd> move · <kbd>s</kbd> save · <kbd>d</kbd> delete · drag to draw</span>
+    </div>
+  </section>
+
+  <aside class="inspector" aria-label="Box and source details">
+    <section class="panel-section" id="boxEditorSection">
+      <div class="section-head"><h2>Selected box</h2><span class="section-count" id="boxOrdinal">—</span></div>
+      <div class="hint" id="boxEmpty">Click a box on the image or draw a new one. Boxes are stored in bucket pixels.</div>
+      <div class="box-form hidden" id="boxForm">
+        <label>
+          <span class="label-text">Box label</span>
+          <select id="boxLabel">
+            <option value="text">text</option>
+            <option value="character">character</option>
+            <option value="object">object</option>
+          </select>
+        </label>
+        <label>
+          <span class="label-text" id="boxTextLabel">Transcribed text</span>
+          <textarea id="boxText" rows="3" spellcheck="false" placeholder="Type exactly what is visible"></textarea>
+        </label>
+        <div class="coord-grid">
+          <label><span class="coord-label">X</span><input class="num-input" id="boxX" type="number" step="1"></label>
+          <label><span class="coord-label">Y</span><input class="num-input" id="boxY" type="number" step="1"></label>
+          <label><span class="coord-label">W</span><input class="num-input" id="boxW" type="number" step="1" min="1"></label>
+          <label><span class="coord-label">H</span><input class="num-input" id="boxH" type="number" step="1" min="1"></label>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn danger" id="deleteSelectedBtn">Delete selected</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-head"><h2>Boxes</h2><span class="section-count" id="boxCount">0</span></div>
+      <ol class="box-list" id="boxList"></ol>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-head"><h2>Text suggestions</h2><span class="section-count">OCR + quotes</span></div>
+      <div class="hint" id="suggestionEmpty">No existing OCR text. Draw a box and transcribe manually.</div>
+      <div class="suggestion-list" id="suggestionList"></div>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-head"><h2>Source caption</h2><span class="section-count" id="captionState">—</span></div>
+      <dl class="source-grid">
+        <dt>Artist</dt><dd id="sourceArtist">—</dd>
+        <dt>Character</dt><dd id="sourceCharacters">—</dd>
+        <dt>File</dt><dd id="sourceFileName">—</dd>
+      </dl>
+      <p class="prose" id="sourceProse">—</p>
+      <div class="issue hidden" id="sourceIssue"></div>
+      <details>
+        <summary>Caption variants</summary>
+        <p id="sourceMedium">—</p>
+        <p id="sourceShort">—</p>
+        <p id="sourceNoArtist">—</p>
+      </details>
+      <details>
+        <summary>Tags</summary>
+        <p id="sourceTags">—</p>
+      </details>
+    </section>
+  </aside>
+</main>
+
+<div class="toast hidden" id="toast" role="alert"></div>
+
+<script>
+const BOOTSTRAP = /*__BOOTSTRAP_START__*/ {"filter": "text", "metadata": "metadata.jsonl"} /*__BOOTSTRAP_END__*/;
+
+const $ = (id) => document.getElementById(id);
+const MIN_BOX = 4;
+// `var` keeps the editor state reachable from DevTools/headless smoke scripts.
+var state = {
+  filter: BOOTSTRAP.filter === "all" ? "all" : "text",
+  items: [],
+  counts: null,
+  detail: null,
+  boxes: [],
+  selected: -1,
+  noText: false,
+  noTextBackup: null,
+  dirty: false,
+  saving: false,
+  savePromise: null,
+  saveTimer: null,
+  editSeq: 0,
+  search: "",
+  saveLabel: "Ready",
+  saveKind: "",
+  toastTimer: null,
+  create: null,
+};
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function clamp(value, low, high) {
+  return Math.max(low, Math.min(high, value));
+}
+
+function isEditable(target) {
+  if (!target || !(target instanceof Element)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
+
+function basename(path) {
+  return String(path || "").split("/").pop() || String(path || "");
+}
+
+function statusLabel(status) {
+  return {
+    pending: "needs review",
+    edited: "edited",
+    reviewed: "reviewed",
+    no_text: "no text",
+  }[status] || "needs review";
+}
+
+function statusDotClass(status) {
+  return "status-dot " + (status || "pending");
+}
+
+function reasonLabel(item) {
+  if (item.reason === "layout") {
+    const n = item.layout_items || 0;
+    return n + " box" + (n === 1 ? "" : "es");
+  }
+  if (item.reason === "empty_layout") return "empty layout";
+  if (item.reason === "text_no_layout") return "text · no layout";
+  return "not queued";
+}
+
+function formatTime(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+}
+
+function setSaveStatus(text, kind) {
+  state.saveLabel = text;
+  state.saveKind = kind || "";
+  const node = $("saveStatus");
+  node.textContent = text;
+  node.className = "save-status " + (kind || "");
+}
+
+function showToast(message, kind) {
+  const node = $("toast");
+  node.textContent = message;
+  node.className = "toast " + (kind || "");
+  node.classList.remove("hidden");
+  clearTimeout(state.toastTimer);
+  state.toastTimer = setTimeout(() => node.classList.add("hidden"), 6000);
+}
+
+function visibleItems() {
+  const needle = state.search.trim().toLowerCase();
+  if (!needle) return state.items;
+  return state.items.filter((item) => String(item.keywords || "").includes(needle));
+}
+
+function currentListPosition() {
+  const list = visibleItems();
+  return {list, pos: list.findIndex((item) => state.detail && item.index === state.detail.index)};
+}
+
+function bucketSize() {
+  const bucket = state.detail ? state.detail.bucket : null;
+  return {w: bucket ? bucket.width : 1, h: bucket ? bucket.height : 1};
+}
+
+function bboxToRect(bbox, bucket) {
+  const x1 = bbox[1] + bucket.width / 2;
+  const y1 = bbox[0] + bucket.height / 2;
+  const x2 = bbox[3] + bucket.width / 2;
+  const y2 = bbox[2] + bucket.height / 2;
+  return {x: x1, y: y1, w: x2 - x1, h: y2 - y1};
+}
+
+function rectToBbox(box, bucket) {
+  const x1 = Math.round(box.x);
+  const y1 = Math.round(box.y);
+  const x2 = Math.round(box.x + box.w);
+  const y2 = Math.round(box.y + box.h);
+  const halfW = Math.floor(bucket.width / 2);
+  const halfH = Math.floor(bucket.height / 2);
+  return [y1 - halfH, x1 - halfW, y2 - halfH, x2 - halfW];
+}
+
+function boxHasText(box) {
+  return Boolean(box && String(box.text || "").trim());
+}
+
+function emptyBoxIndex() {
+  return state.boxes.findIndex((box) => !boxHasText(box));
+}
+
+function selectedBox() {
+  return state.selected >= 0 ? state.boxes[state.selected] : null;
+}
+
+function setFilterButtons() {
+  document.querySelectorAll("[data-filter]").forEach((button) => {
+    button.setAttribute("aria-pressed", button.dataset.filter === state.filter ? "true" : "false");
+  });
+}
+
+async function loadItems(filter) {
+  const response = await fetch("/api/items?filter=" + encodeURIComponent(filter));
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({error: "Could not load items."}));
+    throw new Error(error.error || "Could not load items.");
+  }
+  const data = await response.json();
+  state.filter = data.filter;
+  state.items = data.items;
+  state.counts = data.counts;
+  setFilterButtons();
+  renderCounts();
+  renderList();
+  updateHeader();
+}
+
+async function setFilter(filter) {
+  if (filter === state.filter) return;
+  if (!(await flushSave())) return;
+  try {
+    await loadItems(filter);
+  } catch (error) {
+    showToast(error.message, "error");
+    return;
+  }
+  const present = state.detail && state.items.some((item) => item.index === state.detail.index);
+  if (!present && state.items.length) {
+    await openItem(state.items[0].index, {skipFlush: true});
+  } else {
+    renderAll();
+  }
+}
+
+async function openItem(index, options) {
+  options = options || {};
+  if (!options.skipFlush && !(await flushSave())) return false;
+  let response;
+  try {
+    response = await fetch("/api/items/" + encodeURIComponent(index));
+  } catch (error) {
+    showToast("Cannot open item: " + error.message, "error");
+    return false;
+  }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({error: "Item not found."}));
+    showToast(error.error || "Item not found.", "error");
+    return false;
+  }
+  const detail = await response.json();
+  state.detail = detail;
+  state.boxes = detail.boxes.map((box) => {
+    const rect = bboxToRect(box.bbox, detail.bucket);
+    const label = box.label || "text";
+    return {
+      x: rect.x, y: rect.y, w: rect.w, h: rect.h,
+      text: label === "text" ? (box.text || "") : (box.caption || box.text || ""),
+      label,
+      caption: box.caption || "visible text",
+    };
+  });
+  state.selected = -1;
+  state.noText = Boolean(detail.no_text);
+  state.noTextBackup = null;
+  state.dirty = false;
+  state.editSeq += 1;
+  setSaveStatus(detail.saved_at ? "Saved " + formatTime(detail.saved_at) : "Ready", detail.saved_at ? "saved" : "");
+  history.replaceState(null, "", "#" + detail.index);
+  const image = $("image");
+  image.src = detail.image_url;
+  image.alt = "Training-bucket crop of " + detail.file_name;
+  $("editorEmpty").classList.add("hidden");
+  $("imageFrame").classList.remove("hidden");
+  renderAll();
+  return true;
+}
+
+function renderAll() {
+  updateHeader();
+  renderMeta();
+  renderList();
+  renderBoxes();
+  renderInspector();
+  renderSuggestions();
+  renderSource();
+}
+
+function updateHeader() {
+  const {list, pos} = currentListPosition();
+  $("itemPosition").textContent = pos >= 0
+    ? "#" + (pos + 1) + " / " + list.length
+    : "— / " + list.length;
+  const counts = state.counts || {};
+  $("queueBadge").textContent = "Queue " + (counts.remaining_queue ?? "—") + "/" + (counts.queue ?? "—");
+  $("prevBtn").disabled = !state.detail || pos === 0;
+  $("nextBtn").disabled = !state.detail || list.length === 0 || pos === list.length - 1;
+  $("saveBtn").disabled = !state.detail || state.saving;
+  $("deleteBoxBtn").disabled = state.selected < 0;
+  $("deleteSelectedBtn").disabled = state.selected < 0;
+  $("addBoxBtn").disabled = !state.detail;
+  $("noTextBtn").disabled = !state.detail || (state.noText && !state.noTextBackup);
+}
+
+function renderCounts() {
+  const counts = state.counts;
+  if (!counts) return;
+  $("statRemaining").innerHTML = "";
+  $("statRemaining").append(document.createTextNode(String(counts.remaining_queue)));
+  $("statRemaining").append(el("small", "", " / " + counts.queue));
+  $("statQueue").textContent = String(counts.queue);
+  $("statMissing").textContent = String(counts.text_no_layout);
+  $("statDone").textContent = String(counts.completed_queue);
+  const done = counts.queue ? (counts.queue - counts.remaining_queue) / counts.queue : 0;
+  $("progressFill").style.width = Math.round(done * 100) + "%";
+  renderList();
+}
+
+function renderList() {
+  const container = $("itemList");
+  const list = visibleItems();
+  container.replaceChildren();
+  $("listCount").textContent = list.length + (state.search.trim() ? " matched" : " images");
+  if (!list.length) {
+    container.append(el("div", "empty-list", state.search.trim()
+      ? "No item matches this search."
+      : "Queue is empty. Every queued image has been reviewed."));
+    updateHeader();
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const item of list) {
+    const current = state.detail && state.detail.index === item.index;
+    const row = el("button", "queue-row" + (current ? " current" : ""));
+    row.type = "button";
+    row.dataset.index = String(item.index);
+    row.setAttribute("role", "listitem");
+    if (current) row.setAttribute("aria-current", "true");
+    row.append(el("span", "qi", "#" + String(item.index + 1).padStart(3, "0")));
+    row.append(el("span", "qname", basename(item.file_name)));
+    const meta = [item.artist || "artist:unknown", (item.characters || []).join(", "), reasonLabel(item)]
+      .filter(Boolean).join(" · ");
+    row.append(el("span", "qmeta", meta));
+    const right = el("span", "qstate");
+    const dot = el("span", statusDotClass(item.status));
+    dot.setAttribute("aria-label", statusLabel(item.status));
+    right.append(dot, el("span", "status-text", statusLabel(item.status)));
+    row.append(right);
+    row.title = item.file_name + " · " + statusLabel(item.status);
+    row.addEventListener("click", () => { openItem(item.index); });
+    fragment.append(row);
+  }
+  container.append(fragment);
+  updateHeader();
+}
+
+function renderMeta() {
+  const detail = state.detail;
+  if (!detail) return;
+  const bucket = detail.bucket;
+  $("metaIndex").textContent = "#" + String(detail.index + 1).padStart(3, "0");
+  $("metaArtist").textContent = "artist " + (detail.artist || "unknown");
+  $("metaCharacters").textContent = "character " + ((detail.characters || []).join(", ") || "—");
+  $("metaBucket").textContent = "bucket " + bucket.width + " × " + bucket.height;
+  $("metaCrop").textContent = "crop " + Number(bucket.crop_pct).toFixed(2) + "%";
+  $("metaSource").textContent = "source " + bucket.source_width + " × " + bucket.source_height;
+  $("metaStatus").textContent = statusLabel(detail.status);
+  $("metaStatus").className = "chip " + (detail.status === "pending" ? "warn" : detail.status === "no_text" ? "" : "ok");
+  $("metaNoText").classList.toggle("hidden", !state.noText);
+  $("metaInvalid").classList.toggle("hidden", !detail.invalid_boxes);
+  $("metaInvalid").textContent = detail.invalid_boxes + " invalid bbox";
+  $("sourceFile").textContent = detail.file_name || BOOTSTRAP.metadata || "metadata.jsonl";
+  $("sourceFile").title = "Source metadata: " + (BOOTSTRAP.metadata || "metadata.jsonl");
+  $("sourceFileName").textContent = detail.file_name || "—";
+  $("captionState").textContent = state.noText ? "prose restored" : (detail.layout ? "layout JSON in long" : "prose long");
+  $("noTextBtn").textContent = state.noText
+    ? (state.noTextBackup ? "Undo no text" : "No text (saved)")
+    : "Mark no text";
+}
+
+function renderSource() {
+  const detail = state.detail;
+  if (!detail) return;
+  $("sourceArtist").textContent = detail.artist || "artist:unknown";
+  $("sourceCharacters").textContent = (detail.characters || []).join(", ") || "—";
+  $("sourceProse").textContent = detail.caption.prose || "—";
+  $("sourceMedium").textContent = detail.caption.medium || "—";
+  $("sourceShort").textContent = detail.caption.short || "—";
+  $("sourceNoArtist").textContent = detail.caption.no_artist || "—";
+  $("sourceTags").textContent = (detail.tags || []).join(", ") || "—";
+  const issue = $("sourceIssue");
+  if (detail.invalid_boxes) {
+    issue.textContent = detail.invalid_boxes + " existing bbox value(s) are outside this bucket and were hidden. "
+      + "Redraw them or pick a matching --target-area.";
+    issue.classList.remove("hidden");
+  } else {
+    issue.classList.add("hidden");
+  }
+}
+
+function pointToBucket(event) {
+  const layer = $("layer");
+  const rect = layer.getBoundingClientRect();
+  const bucket = bucketSize();
+  return {
+    x: clamp(((event.clientX - rect.left) / Math.max(1, rect.width)) * bucket.w, 0, bucket.w),
+    y: clamp(((event.clientY - rect.top) / Math.max(1, rect.height)) * bucket.h, 0, bucket.h),
+  };
+}
+
+function setBoxStyle(node, box) {
+  const bucket = bucketSize();
+  node.style.left = (box.x / bucket.w) * 100 + "%";
+  node.style.top = (box.y / bucket.h) * 100 + "%";
+  node.style.width = Math.max(0.25, (box.w / bucket.w) * 100) + "%";
+  node.style.height = Math.max(0.25, (box.h / bucket.h) * 100) + "%";
+  const index = state.boxes.indexOf(box);
+  const textNode = node.querySelector(".bbox-text");
+  if (textNode) textNode.textContent = box.text || "";
+  const badge = node.querySelector(".bbox-badge");
+  if (badge) badge.textContent = "#" + (index + 1);
+}
+
+function renderBoxes() {
+  if (!state.detail) return;
+  const layer = $("layer");
+  layer.replaceChildren();
+  state.boxes.forEach((box, index) => {
+    const node = el("div", "bbox" + (index === state.selected ? " selected" : ""));
+    node.dataset.index = String(index);
+    node.title = box.text || "Empty box";
+    node.append(el("span", "bbox-badge", "#" + (index + 1)));
+    node.append(el("span", "bbox-text", box.text || ""));
+    for (const handle of ["nw", "n", "ne", "e", "se", "s", "sw", "w"]) {
+      const grip = el("span", "handle");
+      grip.dataset.handle = handle;
+      grip.addEventListener("pointerdown", (event) => beginBoxDrag(event, index, handle));
+      node.append(grip);
+    }
+    node.addEventListener("pointerdown", (event) => beginBoxDrag(event, index, "move"));
+    setBoxStyle(node, box);
+    layer.append(node);
+  });
+  if (state.create) {
+    const rect = state.create.rect();
+    const draft = el("div", "draft");
+    draft.style.left = (rect.x / bucketSize().w) * 100 + "%";
+    draft.style.top = (rect.y / bucketSize().h) * 100 + "%";
+    draft.style.width = (rect.w / bucketSize().w) * 100 + "%";
+    draft.style.height = (rect.h / bucketSize().h) * 100 + "%";
+    layer.append(draft);
+  }
+  renderBoxList();
+}
+
+function beginBoxDrag(event, index, mode) {
+  if (event.button !== 0 || !state.detail) return;
+  const box = state.boxes[index];
+  if (!box) return;
+  event.preventDefault();
+  event.stopPropagation();
+  selectBox(index);
+  const start = pointToBucket(event);
+  const origin = {x: box.x, y: box.y, w: box.w, h: box.h};
+  let changed = false;
+  const onMove = (moveEvent) => {
+    const point = pointToBucket(moveEvent);
+    const dx = point.x - start.x;
+    const dy = point.y - start.y;
+    const bucket = bucketSize();
+    let x1 = origin.x;
+    let y1 = origin.y;
+    let x2 = origin.x + origin.w;
+    let y2 = origin.y + origin.h;
+    if (mode === "move") {
+      const width = origin.w;
+      const height = origin.h;
+      x1 = clamp(origin.x + dx, 0, Math.max(0, bucket.w - width));
+      y1 = clamp(origin.y + dy, 0, Math.max(0, bucket.h - height));
+      x2 = x1 + width;
+      y2 = y1 + height;
+    } else {
+      if (mode.includes("w")) x1 = clamp(origin.x + dx, 0, x2 - MIN_BOX);
+      if (mode.includes("e")) x2 = clamp(origin.x + origin.w + dx, x1 + MIN_BOX, bucket.w);
+      if (mode.includes("n")) y1 = clamp(origin.y + dy, 0, y2 - MIN_BOX);
+      if (mode.includes("s")) y2 = clamp(origin.y + origin.h + dy, y1 + MIN_BOX, bucket.h);
+    }
+    const next = {x: x1, y: y1, w: x2 - x1, h: y2 - y1};
+    if (next.x !== box.x || next.y !== box.y || next.w !== box.w || next.h !== box.h) {
+      Object.assign(box, next);
+      changed = true;
+      renderBoxes();
+      syncGeometryInputs();
+    }
+  };
+  const onUp = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointercancel", onUp);
+    if (changed) {
+      markDirty();
+      scheduleSave();
+    }
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointercancel", onUp);
+}
+
+function beginCreate(event) {
+  if (event.button !== 0 || !state.detail) return;
+  if (event.target.closest(".bbox")) return;
+  const start = pointToBucket(event);
+  state.create = {
+    start,
+    current: {...start},
+    rect() {
+      const x1 = Math.min(this.start.x, this.current.x);
+      const y1 = Math.min(this.start.y, this.current.y);
+      return {
+        x: x1,
+        y: y1,
+        w: Math.abs(this.current.x - this.start.x),
+        h: Math.abs(this.current.y - this.start.y),
+      };
+    },
+  };
+  selectBox(-1);
+  renderBoxes();
+  $("layer").setPointerCapture(event.pointerId);
+  event.preventDefault();
+}
+
+function moveCreate(event) {
+  if (!state.create) return;
+  state.create.current = pointToBucket(event);
+  renderBoxes();
+}
+
+function endCreate(event) {
+  if (!state.create) return;
+  const rect = state.create.rect();
+  state.create = null;
+  try { $("layer").releasePointerCapture(event.pointerId); } catch (error) { /* already released */ }
+  renderBoxes();
+  if (rect.w >= 8 && rect.h >= 6) {
+    addBox({x: rect.x, y: rect.y, w: rect.w, h: rect.h, focus: true});
+  }
+}
+
+function selectBox(index) {
+  state.selected = index;
+  renderBoxes();
+  renderInspector();
+  updateHeader();
+}
+
+function renderInspector() {
+  const box = selectedBox();
+  $("boxEmpty").classList.toggle("hidden", Boolean(box));
+  $("boxForm").classList.toggle("hidden", !box);
+  $("boxOrdinal").textContent = box ? "#" + (state.selected + 1) + " of " + state.boxes.length : "—";
+  $("boxCount").textContent = state.boxes.length + (state.boxes.length === 1 ? " box" : " boxes");
+  if (box) {
+    $("boxLabel").value = box.label || "text";
+    const labelIsText = (box.label || "text") === "text";
+    $("boxTextLabel").textContent = labelIsText ? "Transcribed text" : "Box description";
+    $("boxText").placeholder = labelIsText ? "Type exactly what is visible" : "Describe the object or character";
+    $("boxText").value = box.text || "";
+    $("boxX").value = Math.round(box.x);
+    $("boxY").value = Math.round(box.y);
+    $("boxW").value = Math.round(box.w);
+    $("boxH").value = Math.round(box.h);
+    if (boxHasText(box) && document.activeElement !== $("boxText")) {
+      $("boxText").value = box.text;
+    }
+  }
+  renderBoxList();
+  updateHeader();
+}
+
+function renderBoxList() {
+  const container = $("boxList");
+  container.replaceChildren();
+  if (!state.boxes.length) {
+    const empty = el("li", "hint", state.noText ? "Marked as no text." : "No boxes yet.");
+    container.append(empty);
+    return;
+  }
+  state.boxes.forEach((box, index) => {
+    const row = el("button", "box-row" + (index === state.selected ? " current" : ""));
+    row.type = "button";
+    row.append(el("span", "bn", "#" + (index + 1)));
+    row.append(el("span", "bt", "[" + (box.label || "text") + "] " + (box.text || "empty")));
+    row.addEventListener("click", () => selectBox(index));
+    const item = el("li");
+    item.append(row);
+    container.append(item);
+  });
+}
+
+function renderSuggestions() {
+  const container = $("suggestionList");
+  container.replaceChildren();
+  const suggestions = state.detail ? state.detail.suggestions : [];
+  $("suggestionEmpty").classList.toggle("hidden", suggestions.length > 0);
+  const used = new Set(state.boxes.filter(boxHasText).map((box) => box.text.trim()));
+  suggestions.forEach((suggestion) => {
+    const text = suggestion.text;
+    const button = el("button", "suggestion" + (used.has(text) ? " used" : ""));
+    button.type = "button";
+    button.title = (suggestion.source === "ocr" ? "Existing layout text" : "Quoted in caption") + ": " + text;
+    button.append(el("span", "stext", text));
+    button.append(el("span", "ssrc", suggestion.source === "ocr" ? "ocr" : "quote"));
+    button.addEventListener("click", () => {
+      const existing = state.boxes.findIndex((box) => box.text.trim() === text);
+      if (existing >= 0) {
+        selectBox(existing);
+      } else {
+        addDefaultBox(text);
+      }
+    });
+    container.append(button);
+  });
+}
+
+function syncGeometryInputs() {
+  const box = selectedBox();
+  if (!box) return;
+  const fields = {x: "boxX", y: "boxY", w: "boxW", h: "boxH"};
+  for (const key of Object.keys(fields)) {
+    const input = $(fields[key]);
+    if (document.activeElement !== input) input.value = Math.round(box[key]);
+  }
+}
+
+function addDefaultBox(text) {
+  if (!state.detail) return;
+  const bucket = bucketSize();
+  const offset = (state.boxes.length % 5) * 22;
+  const width = Math.min(180, bucket.w);
+  const height = 46;
+  addBox({
+    x: clamp(bucket.w / 2 - width / 2 + offset, 0, Math.max(0, bucket.w - width)),
+    y: clamp(bucket.h / 2 - height / 2 + offset, 0, Math.max(0, bucket.h - height)),
+    w: width,
+    h: height,
+    text: text || "",
+    focus: !text,
+  });
+}
+
+function addBox(options) {
+  if (!state.detail) return;
+  options = options || {};
+  const bucket = bucketSize();
+  const width = clamp(options.w || 160, MIN_BOX, bucket.w);
+  const height = clamp(options.h || 46, MIN_BOX, bucket.h);
+  const box = {
+    x: clamp(options.x || 0, 0, bucket.w - width),
+    y: clamp(options.y || 0, 0, bucket.h - height),
+    w: width,
+    h: height,
+    text: options.text || "",
+    label: options.label || "text",
+    caption: options.caption || "visible text",
+  };
+  if (state.noText) {
+    state.noText = false;
+    state.noTextBackup = null;
+  }
+  state.boxes.push(box);
+  state.selected = state.boxes.length - 1;
+  state.editSeq += 1;
+  state.dirty = true;
+  renderBoxes();
+  renderInspector();
+  renderSuggestions();
+  renderMeta();
+  if (options.focus) {
+    $("boxText").focus();
+    $("boxText").select();
+  }
+  markDirty({autosave: false});
+  if (boxHasText(box)) scheduleSave();
+}
+
+function deleteSelected() {
+  if (state.selected < 0) return;
+  state.boxes.splice(state.selected, 1);
+  state.selected = state.boxes.length ? Math.min(state.selected, state.boxes.length - 1) : -1;
+  state.editSeq += 1;
+  state.dirty = true;
+  renderBoxes();
+  renderInspector();
+  renderSuggestions();
+  markDirty({autosave: false});
+  scheduleSave();
+}
+
+function applyGeometryInputs() {
+  const box = selectedBox();
+  if (!box) return;
+  const bucket = bucketSize();
+  const x = Number($("boxX").value);
+  const y = Number($("boxY").value);
+  const w = Number($("boxW").value);
+  const h = Number($("boxH").value);
+  if (![x, y, w, h].every(Number.isFinite)) {
+    syncGeometryInputs();
+    return;
+  }
+  const width = clamp(w, MIN_BOX, bucket.w);
+  const height = clamp(h, MIN_BOX, bucket.h);
+  box.x = clamp(x, 0, bucket.w - width);
+  box.y = clamp(y, 0, bucket.h - height);
+  box.w = width;
+  box.h = height;
+  renderBoxes();
+  syncGeometryInputs();
+  markDirty();
+  scheduleSave();
+}
+
+function markDirty(options) {
+  options = options || {};
+  state.dirty = true;
+  state.editSeq += 1;
+  setSaveStatus("Unsaved changes", "dirty");
+  updateHeader();
+  if (options.autosave !== false) scheduleSave();
+}
+
+function scheduleSave() {
+  clearTimeout(state.saveTimer);
+  if (!state.detail || !state.dirty || state.saving) return;
+  if (state.noText) {
+    state.saveTimer = setTimeout(() => { saveCurrent({auto: true}); }, 900);
+    return;
+  }
+  if (!state.boxes.length) {
+    setSaveStatus("No boxes — Save marks no text", "dirty");
+    return;
+  }
+  const empty = emptyBoxIndex();
+  if (empty >= 0) {
+    setSaveStatus("Box #" + (empty + 1) + " needs text", "dirty");
+    return;
+  }
+  state.saveTimer = setTimeout(() => { saveCurrent({auto: true}); }, 1200);
+}
+
+async function saveCurrent(options) {
+  options = options || {};
+  if (!state.detail) return true;
+  clearTimeout(state.saveTimer);
+  if (state.saving && state.savePromise) {
+    try { await state.savePromise; } catch (error) { /* surfaced by the first call */ }
+    return !state.dirty;
+  }
+  if (!state.noText && state.boxes.length && emptyBoxIndex() >= 0) {
+    setSaveStatus("Box #" + (emptyBoxIndex() + 1) + " needs text", "dirty");
+    if (!options.auto) showToast("Every box needs transcribed text before saving.", "error");
+    return false;
+  }
+  const seq = state.editSeq;
+  const bucket = bucketSize();
+  const boxes = state.noText ? [] : state.boxes.map((box) => {
+    const label = box.label || "text";
+    const value = String(box.text || "").trim();
+    if (label === "text") {
+      return {bbox: rectToBbox(box, bucket), label: "text", text: value, caption: "visible text"};
+    }
+    return {bbox: rectToBbox(box, bucket), label, caption: value};
+  });
+  const payload = {boxes, no_text: Boolean(state.noText)};
+  state.saving = true;
+  state.savePromise = null;
+  setSaveStatus("Saving…", "saving");
+  updateHeader();
+  const request = (async () => {
+    let response;
+    try {
+      response = await fetch("/api/items/" + encodeURIComponent(state.detail.index) + "/save", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      setSaveStatus("Save failed", "error");
+      showToast("Save failed: " + error.message, "error");
+      return false;
+    }
+    let data = null;
+    try { data = await response.json(); } catch (error) { /* handled below */ }
+    if (!response.ok) {
+      const message = data && data.error ? data.error : "HTTP " + response.status;
+      setSaveStatus("Save failed", "error");
+      showToast(message, "error");
+      return false;
+    }
+    if (!data) {
+      setSaveStatus("Save failed", "error");
+      showToast("The server returned an invalid save response.", "error");
+      return false;
+    }
+    state.counts = data.counts;
+    state.detail = data;
+    const item = state.items.find((entry) => entry.index === data.index);
+    if (item) {
+      Object.assign(item, {
+        status: data.status,
+        saved_at: data.saved_at,
+        layout_items: data.queue.layout_items,
+        has_layout: data.queue.has_layout,
+        in_queue: data.queue.in_queue,
+        reason: data.queue.reason,
+        text_hint: data.queue.text_hint,
+      });
+    }
+    if (seq === state.editSeq) {
+      state.boxes = data.boxes.map((box) => {
+        const rect = bboxToRect(box.bbox, data.bucket);
+        return {x: rect.x, y: rect.y, w: rect.w, h: rect.h, text: box.text};
+      });
+      state.noText = Boolean(data.no_text);
+      state.dirty = false;
+      state.selected = state.selected >= state.boxes.length ? state.boxes.length - 1 : state.selected;
+      const time = formatTime(data.saved_at);
+      setSaveStatus((time ? "Saved " + time : "Saved") + (data.no_text ? " · no text" : ""), "saved");
+    } else {
+      state.dirty = true;
+      setSaveStatus("Saved previous edit · unsaved changes", "dirty");
+      scheduleSave();
+    }
+    renderCounts();
+    renderList();
+    renderMeta();
+    renderBoxes();
+    renderInspector();
+    renderSuggestions();
+    renderSource();
+    if (!options.auto) showToast(data.no_text ? "Saved: marked no text." : "Saved layout.", "ok");
+    return true;
+  })();
+  state.savePromise = request;
+  try {
+    return await request;
+  } finally {
+    state.saving = false;
+    state.savePromise = null;
+    updateHeader();
+  }
+}
+
+async function flushSave() {
+  clearTimeout(state.saveTimer);
+  if (state.saving && state.savePromise) {
+    try { await state.savePromise; } catch (error) { /* already surfaced */ }
+  }
+  if (!state.dirty) return true;
+  return saveCurrent({auto: true});
+}
+
+async function navigate(offset) {
+  if (!state.detail) return;
+  const {list, pos} = currentListPosition();
+  if (!list.length) return;
+  let nextPos;
+  if (offset > 0) nextPos = pos < 0 ? 0 : Math.min(list.length - 1, pos + 1);
+  else nextPos = pos < 0 ? list.length - 1 : Math.max(0, pos - 1);
+  if (nextPos === pos) return;
+  await openItem(list[nextPos].index);
+}
+
+async function toggleNoText() {
+  if (!state.detail) return;
+  if (state.noText && state.noTextBackup) {
+    state.boxes = state.noTextBackup;
+    state.noTextBackup = null;
+    state.noText = false;
+    state.selected = state.boxes.length ? 0 : -1;
+  } else {
+    state.noTextBackup = state.boxes.map((box) => ({...box}));
+    state.boxes = [];
+    state.noText = true;
+    state.selected = -1;
+  }
+  state.editSeq += 1;
+  state.dirty = true;
+  renderAll();
+  setSaveStatus("Saving no text…", "saving");
+  await saveCurrent({auto: false});
+}
+
+function nudgeSelected(dx, dy) {
+  const box = selectedBox();
+  if (!box) return;
+  const bucket = bucketSize();
+  box.x = clamp(box.x + dx, 0, bucket.w - box.w);
+  box.y = clamp(box.y + dy, 0, bucket.h - box.h);
+  renderBoxes();
+  syncGeometryInputs();
+  markDirty();
+  scheduleSave();
+}
+
+function bindEvents() {
+  document.querySelectorAll("[data-filter]").forEach((button) => {
+    button.addEventListener("click", () => setFilter(button.dataset.filter));
+  });
+  $("prevBtn").addEventListener("click", () => navigate(-1));
+  $("nextBtn").addEventListener("click", () => navigate(1));
+  $("saveBtn").addEventListener("click", () => saveCurrent({auto: false}));
+  $("addBoxBtn").addEventListener("click", () => addDefaultBox(""));
+  $("deleteBoxBtn").addEventListener("click", deleteSelected);
+  $("deleteSelectedBtn").addEventListener("click", deleteSelected);
+  $("noTextBtn").addEventListener("click", toggleNoText);
+
+  $("boxText").addEventListener("input", () => {
+    const box = selectedBox();
+    if (!box) return;
+    box.text = $("boxText").value;
+    if ((box.label || "text") !== "text") box.caption = box.text;
+    renderBoxes();
+    renderBoxList();
+    renderSuggestions();
+    markDirty({autosave: false});
+    scheduleSave();
+  });
+  $("boxLabel").addEventListener("change", () => {
+    const box = selectedBox();
+    if (!box) return;
+    box.label = $("boxLabel").value;
+    if (box.label === "text") {
+      box.caption = "visible text";
+    } else {
+      box.caption = box.text || box.caption || box.label;
+    }
+    renderInspector();
+    markDirty({autosave: false});
+    scheduleSave();
+  });
+  ["boxX", "boxY", "boxW", "boxH"].forEach((id) => {
+    $(id).addEventListener("change", applyGeometryInputs);
+    $(id).addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); applyGeometryInputs(); }
+    });
+  });
+
+  $("searchInput").addEventListener("input", () => {
+    state.search = $("searchInput").value;
+    renderList();
+  });
+  $("searchInput").addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      $("searchInput").value = "";
+      state.search = "";
+      renderList();
+      $("searchInput").blur();
+    }
+  });
+
+  $("layer").addEventListener("pointerdown", beginCreate);
+  $("layer").addEventListener("pointermove", moveCreate);
+  $("layer").addEventListener("pointerup", endCreate);
+  $("layer").addEventListener("pointercancel", endCreate);
+
+  $("image").addEventListener("load", () => {
+    $("editorEmpty").classList.add("hidden");
+    $("imageFrame").classList.remove("hidden");
+    renderBoxes();
+  });
+  $("image").addEventListener("error", () => {
+    $("imageFrame").classList.add("hidden");
+    $("editorEmpty").classList.remove("hidden");
+    $("editorEmpty").replaceChildren(
+      el("strong", "", "Image unavailable"),
+      el("span", "", "The bucket crop could not be decoded. Check the image file.")
+    );
+  });
+
+  window.addEventListener("keydown", (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (isEditable(event.target)) {
+      if (event.key === "Escape") event.target.blur();
+      return;
+    }
+    if (event.key === "n") { event.preventDefault(); navigate(1); }
+    else if (event.key === "p") { event.preventDefault(); navigate(-1); }
+    else if (event.key === "s") { event.preventDefault(); saveCurrent({auto: false}); }
+    else if (event.key === "d" || event.key === "Delete" || event.key === "Backspace") {
+      if (state.selected >= 0) { event.preventDefault(); deleteSelected(); }
+    } else if (event.key === "Escape") {
+      if (state.selected >= 0) selectBox(-1);
+    } else if (event.key.startsWith("Arrow") && state.selected >= 0) {
+      event.preventDefault();
+      const step = event.shiftKey ? 10 : 1;
+      if (event.key === "ArrowLeft") nudgeSelected(-step, 0);
+      if (event.key === "ArrowRight") nudgeSelected(step, 0);
+      if (event.key === "ArrowUp") nudgeSelected(0, -step);
+      if (event.key === "ArrowDown") nudgeSelected(0, step);
+    }
+  });
+
+  window.addEventListener("beforeunload", (event) => {
+    if (!state.dirty) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
+
+  window.addEventListener("hashchange", () => {
+    const index = Number.parseInt(location.hash.replace(/^#/, ""), 10);
+    if (!Number.isNaN(index) && (!state.detail || index !== state.detail.index)) {
+      openItem(index);
+    }
+  });
+}
+
+async function boot() {
+  bindEvents();
+  setFilterButtons();
+  $("sourceFile").textContent = BOOTSTRAP.metadata || "metadata.jsonl";
+  try {
+    await loadItems(state.filter);
+  } catch (error) {
+    showToast(error.message, "error");
+    $("editorEmpty").replaceChildren(
+      el("strong", "", "Cannot load the review queue"),
+      el("span", "", error.message)
+    );
+    return;
+  }
+  const hash = Number.parseInt(location.hash.replace(/^#/, ""), 10);
+  const hashed = !Number.isNaN(hash) && state.items.some((item) => item.index === hash);
+  const start = hashed ? hash : (state.items.length ? state.items[0].index : null);
+  if (start === null) {
+    $("editorEmpty").replaceChildren(
+      el("strong", "", "Queue complete"),
+      el("span", "", "Switch to “All images” to review items outside the text queue.")
+    );
+    return;
+  }
+  await openItem(start, {skipFlush: true});
+}
+
+boot();
+</script>
+</body>
+</html>

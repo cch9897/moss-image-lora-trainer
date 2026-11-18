@@ -55,6 +55,37 @@ data/
 long/medium/short captions、`metadata.jsonl` 和裁剪/token 报告，见
 [docs/CAPTIONS.md](docs/CAPTIONS.md)。
 
+### 3.1 自动打标（可选）
+
+`moss-lora-tag` 用本地 booru tagger 给 staged `metadata_staging.jsonl` 补角色、通用 tag 和 rating。
+它只读本地权重，**不会下载模型**；ONNX Runtime 后端的安装方式是
+`pip install -e '.[tagging]'`（GPU 需自行安装匹配 CUDA 的 `onnxruntime-gpu`）。
+
+```bash
+# 200 张已知 character/tags 的当前数据：校准阈值并写出 tagger_config.json
+moss-lora-tag --calibrate-only \
+  --model /path/to/wd-eva02-large-tagger-v3.onnx \
+  --backend onnx --device cuda \
+  --calibrate-jsonl /path/to/calibration_rows.jsonl \
+  --calibration-images /path/to/current_dataset \
+  --calibration-report /path/to/tagger_calibration/tagger_calibration.json
+
+# 用校准后的配置给 staged 数据打标
+moss-lora-tag --input /path/to/expansion/metadata_staging.jsonl \
+  --images /path/to/expansion \
+  --model /path/to/wd-eva02-large-tagger-v3.onnx \
+  --backend onnx --device cuda \
+  --config /path/to/tagger_calibration/tagger_config.json \
+  --output /path/to/tagged/metadata_tagged.jsonl
+```
+
+`--images` 是 `file_name` 的根目录：staging 的 `file_name` 形如 `images/000001.jpg`，
+所以通常传 expansion 目录本身，而不是它的 `images/` 子目录。
+
+WD14 ONNX 权重旁边的 `selected_tags.csv` 会自动识别；PixAI/deepghs 的 NCHW 权重需要
+`preprocess.json`。每行写回 `character`、`tags`、`tag_confidence`、`rating` 和
+`character_missing` / `tags_low_confidence` 标志。`artist` 仍由 staging 解析。
+
 ### 4. 缓存
 
 ```bash
@@ -111,6 +142,7 @@ moss-lora-export-comfy --adapter runs/moss_1m \
 - **可恢复**：精确保存/恢复模型、优化器、scheduler 与 RNG 状态。
 - **可验证**：内置采样 CLI、LoRA 合并、step time/峰值显存基准。
 - **实时看板**：只读监控 loss/EMA、LR、采样图、checkpoint、配置与 ETA；自动刷新，支持 SSH 端口转发。
+- **人工复核 layout**：本地浏览器逐图检查/增删/拖动/缩放 OCR 文本框并修正原文，自动保存为可训练 layout；手写体/艺术字 OCR 漏检时可人工补齐。
 - **ComfyUI 导出**：把训练器 key 转换为 ComfyUI 可加载的 `diffusion_model.*` 格式。
 - **有实测锚点**：本地 WSL2 RTX 5090 的 20-step smoke 为 1.25 s/step、峰值 12.84GB（仅冒烟参考，见 [docs/5090.md](docs/5090.md#33-已测20-step-smoke2026-10-18)）。
 
@@ -121,6 +153,7 @@ moss-lora-export-comfy --adapter runs/moss_1m \
 | [docs/RESEARCH.md](docs/RESEARCH.md) | 架构、token 数学、flow-matching、latent/patchify、LoRA 设计、显存与吞吐分析、未知项 |
 | [docs/CONFIG.md](docs/CONFIG.md) | 全部配置字段与默认值、超参建议、输出/checkpoint 布局、resume、1M/512/长跑配方 |
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | 只读实时看板：安装/启动、曲线与采样、状态/ETA、HTTP API、安全与 SSH 端口转发 |
+| [docs/REVIEW.md](docs/REVIEW.md) | 本地 bbox/文字人工复核：启动、队列、坐标、layout 保存策略、导出、安全与测试 |
 | [docs/5090.md](docs/5090.md) | 硬件基线、驱动/wheel 验证、显存规划、OOM 阶梯、性能开关、实测表 |
 | [docs/DATASET.md](docs/DATASET.md) | 数据目录、metadata.jsonl、layout JSON、caption 变体与质量规范 |
 | [docs/CAPTIONS.md](docs/CAPTIONS.md) | 原始 tag+prose 解析、混合画师 caption、单语言 prose、负向 tag 清理、文字/手部覆盖、分桶裁剪风险、OCR/bbox/layout 与报告字段 |

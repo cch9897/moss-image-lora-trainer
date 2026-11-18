@@ -15,7 +15,8 @@
 ├── images/000001.jpg          # 指向源图的相对 symlink（或 --copy-images 的副本）
 ├── metadata.jsonl             # 每行一个训练样本
 ├── report.json                # 机器可读统计
-└── report.md                  # 人类可读统计
+├── report.md                  # 人类可读统计
+└── README.md                  # 目录说明（字段、用法、注意事项）
 ```
 
 源目录只读；脚本不会修改、移动或删除源图片与 sidecar。
@@ -157,6 +158,7 @@ short  = <trigger>, artist:<id>, character:<id...>, <最多 12 个 tag>
 | `caption_no_artist` | 无画师条件的 long 变体 |
 | `preference_level` | 输入提供时原样写入；未提供时为 `null` |
 | `layout` | 输入提供时写入；OCR `field` / `both` 模式也会写入生成的 layout，`variant` 不写 |
+| `ocr_low_confidence` | 低于 `--ocr-min-confidence` 的框（`count` + 入桶可见的 `items`：text/confidence/bbox）；仅用于人工复查，绝不进入 caption 或 layout |
 
 `moss-lora-cache` 读取 `caption` object 的三个非空变体；如果 long 与 medium 完全相同（例如只有一个
 英文段落且 tag 不超过 25 个），cache 会自动去重，因此实际缓存的变体数可能是 2 而不是 3。
@@ -262,7 +264,9 @@ crop_fraction = 1 - (bucket_w * bucket_h) / (resized_w * resized_h)
 
 ## 8. OCR 与 layout（可选）
 
-文字密集的图片可以额外生成官方 MOSS layout。OCR 全部在本地 CPU 运行即可，不依赖 WSL/5090。
+文字密集的图片可以额外生成官方 MOSS layout。OCR 默认在 CPU 运行即可，不依赖 WSL/5090；
+PaddleOCR 3.x 的 ONNX 后端也可以用 `--ocr-device gpu` 走 CUDA，大图（`--ocr-max-side 2048`）
+在 8GB 卡上约 0.4–0.7 s/图。
 
 ### 8.1 安装与后端
 
@@ -274,6 +278,17 @@ pip install -e '.[ocr]'          # rapidocr-onnxruntime
 sudo apt install tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-jpn
 ```
 
+PaddleOCR 3.x 走 ONNX 引擎（不需要 `paddlepaddle`）：
+
+```bash
+pip install paddleocr paddlex onnxruntime            # CPU
+pip install paddleocr paddlex onnxruntime-gpu        # GPU；另需 CUDA 12 + cuDNN 9 运行库
+```
+
+GPU 版需要能让动态加载器找到 CUDA/cuDNN（系统安装，或 `nvidia-*-cu12` wheel 目录加进
+`LD_LIBRARY_PATH`）。模型（`PP-OCRv6_medium_det/rec` 的 ONNX 变体）首次运行时自动下载到
+`~/.paddlex/official_models/`。
+
 支持的后端：
 
 | `--ocr` | 说明 |
@@ -282,11 +297,27 @@ sudo apt install tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-jpn
 | `rapidocr` | 轻量 ONNX，CPU 友好；默认模型为中文/英文，日文识别能力有限 |
 | `tesseract` | 系统二进制；语言用 `--ocr-lang` 指定（`ch_sim`→`chi_sim`、`en`→`eng`、`ja`→`jpn`） |
 | `easyocr` | 可选，首次使用会下载模型；支持 `ch_sim`/`en`/`ja` |
-| `paddle` | 可选，首次使用会下载模型；语言映射到 PaddleOCR 的 `ch`/`en`/`japan` |
+| `paddle` | 可选，首次使用会下载模型；语言映射到 PaddleOCR 的 `ch`/`en`/`japan`。PaddleOCR 3.x 下走 `engine="onnxruntime"` + 官方 PP-OCRv6 medium ONNX 模型，可用 `--ocr-device gpu` 跑 CUDAExecutionProvider |
 
-`rapidocr`/`tesseract` 不需要 GPU。`--ocr-gpu` 只是请求；如果后端或 onnxruntime 没有 CUDA provider，
-会自动回退 CPU，并在报告与终端提示。大图会先缩放到 `--ocr-max-side`（默认 1600）做 OCR，再把框映射回
+`tesseract` 不需要 GPU。`--ocr-device` 只是请求：`auto` 在检测到 CUDA provider（或 PaddlePaddle CUDA 构建）时用 GPU，
+否则用 CPU；`cpu`/`gpu` 是显式请求，`gpu` 不可用时会回退 CPU，并在报告与终端提示。
+`report.json` 的 `ocr.engine` / `ocr.onnxruntime.providers` 记录实际使用的引擎与执行 provider。
+大图会先缩放到 `--ocr-max-side`（默认 1600）做 OCR，再把框映射回
 原图；这不会改变最终 bbox 的坐标系。2048 更慢但对小字更稳，可按需 opt-in。
+
+PaddleOCR 3.x + ONNX 需要 `onnxruntime`；GPU 需要 `onnxruntime-gpu`（CUDA/cuDNN 运行库），
+与 PaddlePaddle 运行时无关（本仓库的 `paddle` 后端不需要 `paddlepaddle`）。
+GPU 上默认使用 `cudnn_conv_algo_search=HEURISTIC`（ORT 默认的 EXHAUSTIVE 搜索在 2048 输入下会把
+显存抬到 ~6.8GB）。批处理 1.4 万张大图时建议：
+
+```bash
+--ocr-max-side 2048 --ocr-det-side 1024 --ocr-gpu-mem-limit 5120
+```
+
+det 输入封顶 1024（识别仍从 2048 图裁切），并用 5120 MiB 硬上限阻止 arena 无限增长：
+实测 8GB 卡上按文件名顺序连续跑 400 张，0 失败、ORT 占用稳定在 3.8GB、约 2.3 图/秒。
+不加 `--ocr-gpu-mem-limit` 时长跑会出现 "Failed to allocate memory"（arena 扩容放不下，
+随后每张图都失败）；报告 `ocr.errors` 会逐张列出失败图片，便于单独重跑。
 
 `--ocr-lang ja` 只对 tesseract（需安装 `jpn` traineddata）或 easyocr 有意义；rapidocr 1.2.3
 自带模型只支持中文/英文，传 `ja` 不会切换模型，日文请换后端或人工检查。
@@ -367,7 +398,12 @@ add_generation_prompt=True, enable_thinking=True)`）再 tokenize，因此这里
 
 报告会给出 layout token 的 p50/p95/max、超过 1024/2048 的比例和截断数量。OCR 对动漫字体、描边字、
 竖排日文的识别质量有限；上线前必须把 bbox 画到图上人工抽查，低置信度样本建议重标或跳过。
-OCR/bbox 质量差时，宁可只用 `--layout-mode field` 或 `--ocr none`，也不要把错位 bbox 送进训练。
+低于 `--ocr-min-confidence` 的框不会被丢弃：它们写入每行的 `ocr_low_confidence`（`text` /
+`confidence` / 训练 bucket 坐标的 `bbox`）并在报告的 `ocr.low_confidence` 汇总，方便逐条复查，
+但不会出现在 `caption`、`layout` 或缓存里。
+用 `moss-lora-review` 可以在训练 bucket 坐标里逐图增删/拖动文本框并修正原文，详见
+[REVIEW.md](REVIEW.md)。OCR/bbox 质量差时，宁可只用 `--layout-mode field` 或 `--ocr none`，
+也不要把错位 bbox 送进训练。
 
 ### 8.6 重建缓存
 
@@ -419,10 +455,12 @@ python scripts/prepare_captions.py \
 | `--target-area` | `1048576` | 裁剪风险与 bbox 使用的 bucket target area |
 | `--ocr` | `none` | `none` / `rapidocr` / `tesseract` / `easyocr` / `paddle` |
 | `--ocr-lang` | `ch_sim+en` | OCR 语言，`+` 分隔；`ja` 需 tesseract/easyocr（rapidocr 仅 ch/en） |
-| `--ocr-gpu` | 关 | 请求 GPU；不可用时自动回退 CPU |
+| `--ocr-device` | `auto` | `auto` / `cpu` / `gpu`；不可用时自动回退 CPU |
 | `--ocr-min-confidence` | `0.5` | 丢弃低置信度框 |
 | `--ocr-max-items` | `20` | 每张图最多 text items |
 | `--ocr-max-side` | `1600` | OCR 输入最大边；框会映射回原图（2048 更慢/小字更稳） |
+| `--ocr-det-side` | `0` | 只限制检测（det）输入最大边，识别仍从 `--ocr-max-side` 图裁切；小显存上用来压峰值内存（0 = 不单独限制） |
+| `--ocr-gpu-mem-limit` | `0` | ONNX Runtime CUDA arena 上限（MiB）；长时间批处理用它阻止 arena 一直增长到下一次扩容放不下（0 = 不限制） |
 | `--layout-mode` | `both` | `field` / `variant` / `both` |
 | `--layout-max-tokens` | `1024` | 单个 layout JSON 的 token 预算 |
 | `--force` | 关 | 替换输出目录中由本脚本生成的文件 |

@@ -18,7 +18,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -45,7 +45,46 @@ PADDLE_LANGS = {"zh": "ch", "ch_sim": "ch", "chinese": "ch", "en": "en",
                 "english": "en", "ja": "japan", "jp": "japan", "jpn": "japan"}
 
 OCR_BACKENDS = ("none", "easyocr", "paddle", "rapidocr", "tesseract")
+OCR_DEVICES = ("auto", "cpu", "gpu")
 RAPIDOCR_MODULE = "rapidocr_onnxruntime"
+# PaddleOCR 3.x engines: "onnxruntime" runs the official PP-OCRv6 medium ONNX
+# models, "paddle" (default) needs the PaddlePaddle runtime.
+PADDLE_ONNX_ENGINE = "onnxruntime"
+PADDLE_ONNX_VERSION = "PP-OCRv6"
+# CUDA provider options for the ONNX engine. The stock EXHAUSTIVE cudnn kernel
+# search is the expensive one: measured on an 8GB card at --ocr-max-side 2048 it
+# held 6.8GB (det + rec sessions) and failed allocations once other processes
+# used the GPU. HEURISTIC search drops that to ~5-6GB with 0 failures over 250
+# diverse images; forcing arena_extend_strategy=kSameAsRequested instead made the
+# arena plateau 1.1GB higher (7.2GB), so only the search mode is overridden.
+PADDLE_CUDA_PROVIDER_OPTIONS = ({"cudnn_conv_algo_search": "HEURISTIC"}, {})
+
+
+def cuda_provider_options(gpu_mem_limit_mib: int = 0) -> list[dict[str, Any]]:
+    """CUDA provider options for the ONNX engine, optionally VRAM-capped.
+
+    ``gpu_mem_limit_mib`` bounds ONNX Runtime's arena so a long run cannot grow
+    until an arena extension for the next image no longer fits (which surfaces
+    as "Failed to allocate memory" on every following image).
+    """
+    cuda_options = dict(PADDLE_CUDA_PROVIDER_OPTIONS[0])
+    if gpu_mem_limit_mib > 0:
+        cuda_options["gpu_mem_limit"] = int(gpu_mem_limit_mib) * 1024 * 1024
+    return [cuda_options, dict(PADDLE_CUDA_PROVIDER_OPTIONS[1])]
+
+
+def strict_cuda_provider_options(gpu_mem_limit_mib: int = 0
+                                 ) -> tuple[list[str], list[dict[str, Any]]]:
+    """Providers/options that leave no CPU fallback path for inference.
+
+    ONNX Runtime always appends ``CPUExecutionProvider`` to a session (host and
+    shape ops need it), but requesting CUDA alone means a node the CUDA EP
+    cannot run fails the session instead of silently costing CPU speed. Callers
+    must still assert ``CUDAExecutionProvider`` is first in ``session.providers``
+    because a missing CUDA shared library is only logged as a warning and the
+    session quietly lands on CPU.
+    """
+    return ["CUDAExecutionProvider"], [cuda_provider_options(gpu_mem_limit_mib)[0]]
 
 
 class OCRError(RuntimeError):
@@ -81,6 +120,11 @@ class OCRResult:
     truncated: int
     device: str
     backend: str
+    engine: str = ""
+    # Boxes below ``min_confidence``, kept in source pixels for manual review.
+    # They never reach the trained labels.
+    low_confidence: list[OCRItem] = field(default_factory=list)
+    low_confidence_dropped: int = 0
 
 
 @dataclass(frozen=True)
@@ -137,30 +181,54 @@ def available_backends() -> dict[str, bool]:
     return {name: backend_available(name) for name in OCR_BACKENDS}
 
 
-def resolve_ocr_device(backend: str, gpu: bool) -> str:
-    """Best-effort device name; silently falls back to CPU when CUDA is unavailable."""
-    if not gpu or backend in ("none", "tesseract"):
-        return "cpu"
-    if backend == "rapidocr":
-        try:
-            import onnxruntime
+def runtime_providers() -> dict[str, Any]:
+    """Describe the installed ONNX Runtime: availability, version, providers."""
+    try:
+        import onnxruntime
+    except Exception:  # pragma: no cover - onnxruntime is optional
+        return {"available": False, "version": None, "providers": []}
+    try:
+        providers = [str(name) for name in onnxruntime.get_available_providers()]
+    except Exception:  # pragma: no cover - broken installs only
+        providers = []
+    return {
+        "available": True,
+        "version": str(getattr(onnxruntime, "__version__", "")),
+        "providers": providers,
+    }
 
-            providers = onnxruntime.get_available_providers()
-            return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
-        except Exception:
-            return "cpu"
+
+def _cuda_provider_available() -> bool:
+    return "CUDAExecutionProvider" in runtime_providers()["providers"]
+
+
+def resolve_ocr_device(backend: str, device: str = "auto") -> str:
+    """Resolve the effective device name for one backend and request.
+
+    ``auto`` selects the GPU when the installed runtime exposes CUDA, otherwise
+    CPU. onnxruntime backends report ``cuda``; the PaddlePaddle runtime reports
+    ``gpu``. An unavailable request falls back to ``cpu`` instead of failing.
+    """
+    if device not in OCR_DEVICES:
+        raise OCRError(f"unknown OCR device {device!r}; expected one of {', '.join(OCR_DEVICES)}")
+    if backend in ("none", "tesseract") or device == "cpu":
+        return "cpu"
+    if backend in ("rapidocr", "paddle"):
+        if _cuda_provider_available():
+            return "cuda" if backend == "rapidocr" else "gpu"
+        if backend == "paddle":
+            try:
+                import paddle
+
+                return "gpu" if paddle.device.is_compiled_with_cuda() else "cpu"
+            except Exception:
+                return "cpu"
+        return "cpu"
     if backend == "easyocr":
         try:
             import torch
 
             return "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:
-            return "cpu"
-    if backend == "paddle":
-        try:
-            import paddle
-
-            return "gpu" if paddle.device.is_compiled_with_cuda() else "cpu"
         except Exception:
             return "cpu"
     return "cpu"
@@ -330,6 +398,43 @@ def items_from_paddle(result: Any) -> list[OCRItem]:
             except (TypeError, ValueError):
                 continue
             if box and text:
+                items.append(OCRItem(text=text, confidence=confidence, box=box))
+    return items
+
+
+def items_from_paddle_v3(result: Any) -> list[OCRItem]:
+    """Parse PaddleOCR 3.x ``predict`` results (one dict-like object per page).
+
+    Each page exposes ``rec_texts``/``rec_scores`` with either ``rec_polys``
+    (quadrilaterals) or ``rec_boxes`` (x1, y1, x2, y2) in input-image pixels.
+    """
+    items: list[OCRItem] = []
+    pages = result if isinstance(result, (list, tuple)) else [result]
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        texts = list(page.get("rec_texts") or [])
+        scores = list(page.get("rec_scores") or [])
+        polys = page.get("rec_polys")
+        if polys is None:
+            polys = page.get("dt_polys")
+        boxes = page.get("rec_boxes")
+        for index, raw_text in enumerate(texts):
+            text = _normalize_text(raw_text)
+            if not text:
+                continue
+            box: tuple[float, float, float, float] | None = None
+            if polys is not None and index < len(polys):
+                box = _polygon_box(polys[index])
+            if box is None and boxes is not None and index < len(boxes):
+                values = [float(value) for value in list(boxes[index])[:4]]
+                if len(values) == 4:
+                    box = (values[0], values[1], values[2], values[3])
+            try:
+                confidence = float(scores[index])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if box is not None and box[2] > box[0] and box[3] > box[1]:
                 items.append(OCRItem(text=text, confidence=confidence, box=box))
     return items
 
@@ -505,13 +610,111 @@ def _easyocr_reader(languages: tuple[str, ...], gpu: bool):
 
 
 @lru_cache(maxsize=4)
-def _paddle_engine(language: str, gpu: bool):
+def _paddle_engine(language: str, device: str, gpu_mem_limit_mib: int = 0,
+                   strict_cuda: bool = False) -> tuple[Any, str]:
+    """Build one PaddleOCR engine and report which runtime it uses.
+
+    PaddleOCR 3.x is built with ``engine="onnxruntime"`` so the official
+    PP-OCRv6 medium ONNX models run through ONNX Runtime (CUDA or CPU).
+    PaddleOCR 2.x installs fall back to the PaddlePaddle runtime.
+    ``strict_cuda`` requests the CUDA EP without the CPU fallback provider.
+    """
     from paddleocr import PaddleOCR
 
+    if importlib.util.find_spec("onnxruntime") is not None:
+        engine_config: dict[str, Any] = {"device_type": device}
+        if device == "gpu":
+            if strict_cuda:
+                providers, provider_options = strict_cuda_provider_options(gpu_mem_limit_mib)
+                engine_config["providers"] = providers
+                engine_config["provider_options"] = provider_options
+            else:
+                engine_config["provider_options"] = cuda_provider_options(gpu_mem_limit_mib)
+        try:
+            engine = PaddleOCR(
+                lang=language,
+                device=device,
+                engine=PADDLE_ONNX_ENGINE,
+                engine_config=engine_config,
+                ocr_version=PADDLE_ONNX_VERSION,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+            )
+        except TypeError:  # PaddleOCR 2.x has no engine=/device= keyword arguments
+            pass
+        else:
+            return engine, PADDLE_ONNX_ENGINE
     try:
-        return PaddleOCR(lang=language, use_gpu=gpu, show_log=False)
+        return PaddleOCR(lang=language, use_gpu=device == "gpu", show_log=False), "paddle"
     except TypeError:
-        return PaddleOCR(lang=language)
+        return PaddleOCR(lang=language), "paddle"
+
+
+def paddle_ocr_engine(*, device: str = "gpu",
+                      languages: str | Iterable[str] | None = None,
+                      gpu_mem_limit_mib: int = 0, strict_cuda: bool = False
+                      ) -> tuple[Any, str]:
+    """Build (and cache) the Paddle OCR engine that ``run_ocr_batch`` uses."""
+    language_list = parse_languages(languages)
+    language = PADDLE_LANGS.get(language_list[0].lower(), language_list[0])
+    resolved = resolve_ocr_device("paddle", device)
+    if strict_cuda and resolved != "gpu":
+        raise OCRError(
+            "strict CUDA requested but the Paddle ONNX engine resolved to "
+            f"{resolved!r}: CUDAExecutionProvider is unavailable"
+        )
+    return _paddle_engine(language, resolved, gpu_mem_limit_mib, strict_cuda)
+
+
+def onnx_session_providers(engine: Any, *, max_depth: int = 8) -> list[list[str]]:
+    """Execution providers of every ONNX Runtime session inside ``engine``.
+
+    A session's first provider runs the graph; ONNX Runtime always appends
+    ``CPUExecutionProvider`` for host/shape ops, so a caller that requires GPU
+    inference must check the first entry of each list. A CUDA shared-library
+    load failure only logs a warning and silently leaves the session on CPU,
+    which is why this inspects the built sessions instead of trusting
+    ``onnxruntime.get_available_providers()``.
+    """
+    import onnxruntime
+
+    seen: set[int] = set()
+    sessions: list[Any] = []
+
+    def walk(value: Any, depth: int) -> None:
+        if depth > max_depth or id(value) in seen:
+            return
+        seen.add(id(value))
+        if isinstance(value, onnxruntime.InferenceSession):
+            sessions.append(value)
+            return
+        if isinstance(value, (str, bytes, int, float, bool, type(None))):
+            return
+        attributes = getattr(value, "__dict__", None)
+        if isinstance(attributes, dict):
+            for child in attributes.values():
+                walk(child, depth + 1)
+
+    walk(engine, 0)
+    return [[str(name) for name in session.get_providers()] for session in sessions]
+
+
+def _run_paddle_engine(engine: Any, array: Any, det_side: int | None = None) -> list[OCRItem]:
+    """Run one PaddleOCR engine through its 3.x or 2.x entry point.
+
+    ``det_side`` caps the text-detection input side; recognition still crops
+    from the full-resolution array, so a cap buys VRAM headroom without
+    blurring the text that gets read.
+    """
+    predict = getattr(engine, "predict", None)
+    if callable(predict):
+        if det_side:
+            return items_from_paddle_v3(predict(
+                array, text_det_limit_side_len=int(det_side), text_det_limit_type="max",
+            ))
+        return items_from_paddle_v3(predict(array))
+    return items_from_paddle(engine.ocr(array, cls=True))
 
 
 @lru_cache(maxsize=2)
@@ -522,33 +725,67 @@ def _rapidocr_engine(use_cuda: bool):
 
 
 def _run_python_backend(image: Image.Image, backend: str, languages: Sequence[str],
-                        device: str) -> list[OCRItem]:
+                        device: str, det_side: int | None = None,
+                        gpu_mem_limit_mib: int = 0) -> tuple[list[OCRItem], str]:
     import numpy as np
 
     array = np.array(image)
     if backend == "easyocr":
         mapped = [EASYOCR_LANGS.get(item.lower(), item) for item in languages]
         reader = _easyocr_reader(tuple(mapped), device == "cuda")
-        return items_from_easyocr(reader.readtext(array, detail=1, paragraph=False))
+        return items_from_easyocr(reader.readtext(array, detail=1, paragraph=False)), "torch"
     if backend == "paddle":
         language = PADDLE_LANGS.get(languages[0].lower(), languages[0])
-        engine = _paddle_engine(language, device == "gpu")
-        return items_from_paddle(engine.ocr(array, cls=True))
+        engine, engine_kind = _paddle_engine(language, device, gpu_mem_limit_mib)
+        # PaddleX reads ndarray input as BGR (ReadImage(format="BGR") does not
+        # convert arrays), so hand it BGR instead of the RGB PIL data.
+        bgr = np.ascontiguousarray(array[:, :, ::-1])
+        return _run_paddle_engine(engine, bgr, det_side), engine_kind
     if backend == "rapidocr":
         engine = _rapidocr_engine(device == "cuda")
         result, _ = engine(array)
-        return items_from_rapidocr(result or [])
+        return items_from_rapidocr(result or []), "onnxruntime"
     raise OCRError(f"unsupported OCR backend: {backend}")
 
 
+def _finalize_ocr(raw: Sequence[OCRItem], *, scale_x: float, scale_y: float,
+                  source_size: tuple[int, int], min_confidence: float,
+                  max_items: int | None, device: str, backend: str,
+                  engine_kind: str) -> OCRResult:
+    """Confidence filter, scale back to source pixels, dedupe, cap (shared by
+    single-image and batched runs)."""
+    raw = [item for item in raw if item.text.strip()]
+    kept_raw = [item for item in raw if item.confidence >= min_confidence]
+    below_raw = [item for item in raw if item.confidence < min_confidence]
+    raw_count = len(kept_raw)
+    scaled = _scale_items(kept_raw, scale_x, scale_y, *source_size)
+    deduped_items, deduped = dedupe_ocr_items(scaled)
+    selected, truncated = select_ocr_items(deduped_items, max_items)
+    below_source = _scale_items(below_raw, scale_x, scale_y, *source_size)
+    review_items, _ = select_ocr_items(below_source, max_items)
+    return OCRResult(
+        items=selected,
+        raw_count=raw_count,
+        deduped=deduped,
+        truncated=truncated,
+        device=device,
+        backend=backend,
+        engine=engine_kind,
+        low_confidence=review_items,
+        low_confidence_dropped=len(below_source),
+    )
+
+
 def run_ocr(image: Image.Image, *, backend: str = "rapidocr",
-            languages: str | Iterable[str] | None = None, gpu: bool = False,
+            languages: str | Iterable[str] | None = None, device: str = "auto",
             min_confidence: float = 0.5, max_items: int | None = 20,
-            max_side: int | None = 1600) -> OCRResult:
+            max_side: int | None = 1600, det_side: int | None = None,
+            gpu_mem_limit_mib: int = 0) -> OCRResult:
     """Run one backend on an EXIF-transposed RGB image.
 
     Boxes are returned in original (EXIF-transposed) source-image pixels even
-    when OCR itself ran on a downscaled copy.
+    when OCR itself ran on a downscaled copy. ``device`` is ``auto`` (GPU when
+    available), ``cpu`` or ``gpu``.
     """
     if backend == "none":
         return OCRResult([], 0, 0, 0, "cpu", "none")
@@ -559,25 +796,92 @@ def run_ocr(image: Image.Image, *, backend: str = "rapidocr",
             f"{', '.join(name for name, ok in available_backends().items() if ok)})"
         )
     language_list = parse_languages(languages)
-    device = resolve_ocr_device(backend, gpu)
+    resolved_device = resolve_ocr_device(backend, device)
     working, scale_x, scale_y, source_size = _load_image(image, max_side)
+    engine_kind = "tesseract" if backend == "tesseract" else ""
     if backend == "tesseract":
         raw = _run_tesseract(working, language_list)
     else:
-        raw = _run_python_backend(working, backend, language_list, device)
-    raw = [item for item in raw if item.text.strip() and item.confidence >= min_confidence]
-    raw_count = len(raw)
-    scaled = _scale_items(raw, scale_x, scale_y, *source_size)
-    deduped_items, deduped = dedupe_ocr_items(scaled)
-    selected, truncated = select_ocr_items(deduped_items, max_items)
-    return OCRResult(
-        items=selected,
-        raw_count=raw_count,
-        deduped=deduped,
-        truncated=truncated,
-        device=device,
-        backend=backend,
+        raw, engine_kind = _run_python_backend(working, backend, language_list, resolved_device,
+                                              det_side, gpu_mem_limit_mib)
+    return _finalize_ocr(
+        raw, scale_x=scale_x, scale_y=scale_y, source_size=source_size,
+        min_confidence=min_confidence, max_items=max_items,
+        device=resolved_device, backend=backend, engine_kind=engine_kind,
     )
+
+
+def run_ocr_batch(images: Sequence[Image.Image], *, backend: str = "paddle",
+                  languages: str | Iterable[str] | None = None, device: str = "gpu",
+                  min_confidence: float = 0.5, max_items: int | None = None,
+                  max_side: int | None = 2048, det_side: int | None = 1024,
+                  gpu_mem_limit_mib: int = 0, strict_cuda: bool = False
+                  ) -> list[OCRResult]:
+    """Run OCR over a batch of images with one engine, returning one result each.
+
+    Only the Paddle backend batches (PaddleOCR 3.x accepts a list of arrays and
+    recognizes the text-line crops of the whole batch together); other backends
+    fall back to one ``run_ocr`` call per image. Boxes follow the same contract
+    as ``run_ocr``. ``strict_cuda`` builds the engine on the CUDA EP alone and
+    raises when that is not what actually runs.
+    """
+    images = list(images)
+    if not images:
+        return []
+    if backend != "paddle":
+        return [run_ocr(image, backend=backend, languages=languages, device=device,
+                        min_confidence=min_confidence, max_items=max_items,
+                        max_side=max_side, det_side=det_side,
+                        gpu_mem_limit_mib=gpu_mem_limit_mib)
+                for image in images]
+    if not backend_available(backend):
+        raise OCRError(f"OCR backend {backend!r} is not available")
+    language_list = parse_languages(languages)
+    resolved_device = resolve_ocr_device(backend, device)
+    if strict_cuda and resolved_device != "gpu":
+        raise OCRError(
+            "strict CUDA requested but the Paddle ONNX engine resolved to "
+            f"{resolved_device!r}: CUDAExecutionProvider is unavailable"
+        )
+    engine, engine_kind = paddle_ocr_engine(
+        device=device, languages=language_list, gpu_mem_limit_mib=gpu_mem_limit_mib,
+        strict_cuda=strict_cuda,
+    )
+    if strict_cuda and engine_kind != PADDLE_ONNX_ENGINE:
+        raise OCRError(
+            f"strict CUDA requested but the engine is {engine_kind!r}, not "
+            f"{PADDLE_ONNX_ENGINE!r}"
+        )
+    loaded = [_load_image(image, max_side) for image in images]
+    predict = getattr(engine, "predict", None)
+    if not callable(predict):  # PaddleOCR 2.x: no batched predict, no strict CUDA
+        return [run_ocr(image, backend=backend, languages=languages, device=device,
+                        min_confidence=min_confidence, max_items=max_items,
+                        max_side=max_side, det_side=det_side,
+                        gpu_mem_limit_mib=gpu_mem_limit_mib)
+                for image in images]
+    import numpy as np
+
+    # PaddleX reads ndarray input as BGR, so hand it BGR like the per-image path.
+    arrays = [np.ascontiguousarray(np.array(working)[:, :, ::-1])
+              for working, _, _, _ in loaded]
+    kwargs: dict[str, Any] = {}
+    if det_side:
+        kwargs = {"text_det_limit_side_len": int(det_side), "text_det_limit_type": "max"}
+    pages = list(predict(arrays, **kwargs))
+    if len(pages) != len(arrays):
+        raise OCRError(
+            f"PaddleOCR returned {len(pages)} results for {len(arrays)} images"
+        )
+    return [
+        _finalize_ocr(
+            items_from_paddle_v3(page),
+            scale_x=scale_x, scale_y=scale_y, source_size=source_size,
+            min_confidence=min_confidence, max_items=max_items,
+            device=resolved_device, backend=backend, engine_kind=engine_kind,
+        )
+        for page, (_, scale_x, scale_y, source_size) in zip(pages, loaded)
+    ]
 
 
 def confidence_distribution(values: Sequence[float]) -> dict[str, Any]:
