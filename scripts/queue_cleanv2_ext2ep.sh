@@ -7,31 +7,31 @@
 # alone. Any incomplete state aborts instead of resuming from a partial run.
 #
 # Start (detached):
-#   nohup setsid bash /home/user/MOSS-Lora-Trainer/scripts/queue_cleanv2_ext2ep.sh \
-#       > /home/user/runs/cleanV2_ext2ep_watch.log 2>&1 < /dev/null &
+#   nohup setsid bash $HOME/MOSS-Lora-Trainer/scripts/queue_cleanv2_ext2ep.sh \
+#       > $HOME/runs/cleanV2_ext2ep_watch.log 2>&1 < /dev/null &
 # Cancel while it is still waiting:
-#   kill "$(cat /home/user/runs/cleanV2_ext2ep_watch.pid)"
+#   kill "$(cat $HOME/runs/cleanV2_ext2ep_watch.pid)"
 set -u -o pipefail
 
-REPO=/home/user/MOSS-Lora-Trainer
+REPO=$HOME/MOSS-Lora-Trainer
 PY=$REPO/venv/bin/python
 
-BASE_RUN=/home/user/runs/cleanV2_4ep_r64_bs8
+BASE_RUN=$HOME/runs/cleanV2_4ep_r64_bs8
 BASE_CONFIG=configs/train_5090_cleanV2_4ep_r64_bs8.yaml
 BASE_PID=69669
 RESUME_STEP=12284
 RESUME_CKPT=$BASE_RUN/checkpoints/step_012284
 
-EXT_RUN=/home/user/runs/cleanV2_ext2ep_r64_bs8
+EXT_RUN=$HOME/runs/cleanV2_ext2ep_r64_bs8
 EXT_CONFIG=configs/train_5090_cleanV2_ext2ep_r64_bs8.yaml
-EXT_LOG=/home/user/runs/cleanV2_ext2ep_r64_bs8.log
+EXT_LOG=$HOME/runs/cleanV2_ext2ep_r64_bs8.log
 EXT_PID_FILE=$EXT_RUN/trainer.pid
 EXT_LAUNCHER=$EXT_RUN/launch_ext.sh
 FINAL_STEP=18426
 FINAL_CKPT=$EXT_RUN/checkpoints/step_018426
 
-WATCH_PID_FILE=/home/user/runs/cleanV2_ext2ep_watch.pid
-LOCK_FILE=/home/user/runs/cleanV2_ext2ep_watch.lock
+WATCH_PID_FILE=$HOME/runs/cleanV2_ext2ep_watch.pid
+LOCK_FILE=$HOME/runs/cleanV2_ext2ep_watch.lock
 MIN_FREE_KB=$((20 * 1024 * 1024))   # 20 GiB
 POLL_SECONDS=60
 
@@ -160,9 +160,9 @@ print(f"checkpoint OK: step={actual[0]} epoch={actual[1]} batch_index={actual[2]
 PY
 
 # ------------------------------------------------------------------ disk space
-guest_kb=$(df -Pk /home/user | awk 'NR==2 {print $4}')
+guest_kb=$(df -Pk $HOME | awk 'NR==2 {print $4}')
 host_kb=$(df -Pk /mnt/c | awk 'NR==2 {print $4}')
-log "guest /home/user: $(df -h /home/user | tail -n1)"
+log "guest $HOME: $(df -h $HOME | tail -n1)"
 log "host   /mnt/c:   $(df -h /mnt/c | tail -n1)"
 [[ -n "$guest_kb" && "$guest_kb" -ge "$MIN_FREE_KB" ]] \
     || abort "guest free space below 20 GiB (${guest_kb:-unknown} KiB available)"

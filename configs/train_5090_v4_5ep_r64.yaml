@@ -2,18 +2,18 @@
 # 20,953 cached images, batch 3 with drop_last -> 6,980 steps/epoch, 34,900 steps total.
 # Checkpoints: every 3,000 steps, keep last 5 + every epoch-end (weights + optimizer).
 model:
-  path: /home/user/models/MOSS-Image-Base
+  path: models/MOSS-Image-Base
   dtype: bf16
   local_files_only: true
 data:
-  cache_dir: /home/user/cache/clean30_v4_1m
+  cache_dir: cache/clean30_v4_1m
   num_workers: 4
   batch_size: 3
   drop_last: true
   pin_memory: true
 train:
   device: cuda
-  output_dir: /home/user/runs/clean30_v4_5ep_r64
+  output_dir: runs/clean30_v4_5ep_r64
   max_steps: 34900
   gradient_accumulation_steps: 1
   learning_rate: 1.0e-4

@@ -30,7 +30,7 @@ Usage::
         [--images-root /path/to/dataset] [--limit N] [--target 74]
 
 Absolute ``image`` paths are written for the cache JSONL, so the output JSONL
-may live outside the image tree (e.g. /home/user/dataset/cleanV2) without
+may live outside the image tree (e.g. ~/dataset/cleanV2) without
 symlinks.  The cache builder resolves ``image`` relative to the JSONL parent,
 so absolute paths are required.
 """

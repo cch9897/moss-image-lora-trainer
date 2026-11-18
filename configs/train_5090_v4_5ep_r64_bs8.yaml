@@ -11,18 +11,18 @@
 #   regular 3,000-step checkpoints; epoch-end checkpoints never consume those slots
 #   and are never pruned.
 model:
-  path: /home/user/models/MOSS-Image-Base
+  path: models/MOSS-Image-Base
   dtype: bf16
   local_files_only: true
 data:
-  cache_dir: /home/user/cache/clean30_v4_1m
+  cache_dir: cache/clean30_v4_1m
   num_workers: 4
   batch_size: 8
   drop_last: true
   pin_memory: true
 train:
   device: cuda
-  output_dir: /home/user/runs/clean30_v4_5ep_r64_bs8
+  output_dir: runs/clean30_v4_5ep_r64_bs8
   max_steps: 13070
   gradient_accumulation_steps: 1
   learning_rate: 1.5e-4

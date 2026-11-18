@@ -5,34 +5,34 @@
 #   ssh -i ~/.ssh/id_ed25519_gpu_host -o BatchMode=yes \
 #       -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 #       user@<gpu-host>
-#   cd /home/user/MOSS-Lora-Trainer
+#   cd $HOME/MOSS-Lora-Trainer
 #   bash scripts/deploy_cleanv2_remote.sh plan
 #   bash scripts/deploy_cleanv2_remote.sh generate
 #   bash scripts/deploy_cleanv2_remote.sh cache      # returns PID immediately
 #   bash scripts/deploy_cleanv2_remote.sh finalize   # after cache exits 0
 #   bash scripts/deploy_cleanv2_remote.sh train      # after finalize
 #
-# The old /home/user/cache/clean30_v4_1m (201G) is never touched.  The new
-# cleanV2 cache is built at /home/user/cache/cleanV2_1m (~236G).
+# The old $HOME/cache/clean30_v4_1m (201G) is never touched.  The new
+# cleanV2 cache is built at $HOME/cache/cleanV2_1m (~236G).
 set -euo pipefail
 
-REPO=${REPO:-/home/user/MOSS-Lora-Trainer}
+REPO=${REPO:-$HOME/MOSS-Lora-Trainer}
 VENV=${VENV:-$REPO/venv/bin/python}
-META=${META:-/home/user/dataset/clean30_top256/final_v4/metadata.jsonl}
-IMAGES_ROOT=${IMAGES_ROOT:-/home/user/dataset/clean30_top256/final_v4}
-OUT=${OUT:-/home/user/dataset/cleanV2}
-CACHE=${CACHE:-/home/user/cache/cleanV2_1m}
-CACHE_LOG=${CACHE_LOG:-/home/user/runs/cleanV2_cache.log}
-CACHE_PID=${CACHE_PID:-/home/user/runs/cleanV2_cache.pid}
+META=${META:-$HOME/dataset/clean30_top256/final_v4/metadata.jsonl}
+IMAGES_ROOT=${IMAGES_ROOT:-$HOME/dataset/clean30_top256/final_v4}
+OUT=${OUT:-$HOME/dataset/cleanV2}
+CACHE=${CACHE:-$HOME/cache/cleanV2_1m}
+CACHE_LOG=${CACHE_LOG:-$HOME/runs/cleanV2_cache.log}
+CACHE_PID=${CACHE_PID:-$HOME/runs/cleanV2_cache.pid}
 CONFIG=${CONFIG:-configs/train_5090_cleanV2_4ep_r64_bs8.yaml}
-RUN_DIR=${RUN_DIR:-/home/user/runs/cleanV2_4ep_r64_bs8}
-TRAIN_LOG=${TRAIN_LOG:-/home/user/runs/cleanV2_4ep_r64_bs8.log}
-LAUNCHER=${LAUNCHER:-/home/user/runs/run_train_cleanV2_4ep_r64_bs8.sh}
+RUN_DIR=${RUN_DIR:-$HOME/runs/cleanV2_4ep_r64_bs8}
+TRAIN_LOG=${TRAIN_LOG:-$HOME/runs/cleanV2_4ep_r64_bs8.log}
+LAUNCHER=${LAUNCHER:-$HOME/runs/run_train_cleanV2_4ep_r64_bs8.sh}
 EPOCHS=${EPOCHS:-4}
 BATCH_SIZE=${BATCH_SIZE:-8}
 MODE=${1:-plan}
 
-MODEL=/home/user/models/MOSS-Image-Base
+MODEL=$HOME/models/MOSS-Image-Base
 NEGATIVE_PROMPT="nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
 VARIANT_WEIGHTS="original=0.16,long=0.2133,medium=0.2133,short=0.25,layout=0.20"
 EXPECTED_BASE=20953
@@ -46,13 +46,13 @@ require_paths() {
 }
 
 disk_free_gb() {
-  df -Pk /home/user | awk 'NR==2 {printf "%d", $4/1024/1024}'
+  df -Pk $HOME | awk 'NR==2 {printf "%d", $4/1024/1024}'
 }
 
 check_disk() {
   local free
   free=$(disk_free_gb)
-  echo "disk free on /home/user: ${free}G"
+  echo "disk free on $HOME: ${free}G"
   if [ "$free" -lt 220 ]; then
     echo "refusing: need >=220G free for the 236G cleanV2 cache (peak text temp ~187G)" >&2
     exit 1
@@ -81,7 +81,7 @@ print(json.dumps(r["counts"], indent=2))
 PY
 
 # 3) build the NEW cache in the background (old clean30_v4_1m is untouched)
-mkdir -p /home/user/runs
+mkdir -p $HOME/runs
 nohup setsid bash -c 'ulimit -n 65536; exec $VENV -m moss_lora.cache \\
   --input $OUT/metadata.jsonl \\
   --output $CACHE \\
@@ -159,7 +159,7 @@ cache() {
     echo "cache path already exists: $CACHE (delete it explicitly to rebuild)" >&2
     exit 2
   fi
-  mkdir -p /home/user/runs
+  mkdir -p $HOME/runs
   nohup setsid bash -c "ulimit -n 65536; exec '$VENV' -m moss_lora.cache \
     --input '$OUT/metadata.jsonl' \
     --output '$CACHE' \

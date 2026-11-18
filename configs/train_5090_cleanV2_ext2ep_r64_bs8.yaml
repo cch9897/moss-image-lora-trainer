@@ -1,22 +1,22 @@
 # cleanV2 extension: 2 more epochs after cleanV2_4ep_r64_bs8 (total 6 epochs).
-# Resume from /home/user/runs/cleanV2_4ep_r64_bs8/checkpoints/step_012284 (epoch 4 boundary).
+# Resume from runs/cleanV2_4ep_r64_bs8/checkpoints/step_012284 (epoch 4 boundary).
 # steps/epoch = sum(items_per_bucket // 8) = 3071
 # max_steps = 3071 * 6 = 18426 (two extra epochs = 6142 steps)
 # warmup is 0 on purpose: the resumed run continues an already-warmed schedule.
 # LR at resume (step 12284 / 18426) = 1.5e-4 * 0.25 = 3.75e-5; reaches 0 at 18426.
 model:
-  path: /home/user/models/MOSS-Image-Base
+  path: models/MOSS-Image-Base
   dtype: bf16
   local_files_only: true
 data:
-  cache_dir: /home/user/cache/cleanV2_1m
+  cache_dir: cache/cleanV2_1m
   num_workers: 4
   batch_size: 8
   drop_last: true
   pin_memory: true
 train:
   device: cuda
-  output_dir: /home/user/runs/cleanV2_ext2ep_r64_bs8
+  output_dir: runs/cleanV2_ext2ep_r64_bs8
   max_steps: 18426
   gradient_accumulation_steps: 1
   learning_rate: 1.5e-4
