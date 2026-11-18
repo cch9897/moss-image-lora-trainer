@@ -14,6 +14,7 @@ import sys
 import time
 
 import torch
+from torch.nn import functional as F
 
 from moss_lora.lora import inject_lora
 from moss_lora.model import MOSSImageTransformer
@@ -66,7 +67,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--text-length", type=int, default=512, help="Synthetic prompt token count")
     parser.add_argument("--checkpointing", dest="checkpointing", action="store_true", default=True)
     parser.add_argument("--no-checkpointing", dest="checkpointing", action="store_false")
-    parser.add_argument("--compile", action="store_true")
+    parser.add_argument("--batched", dest="batched", action="store_true", default=True,
+                        help="Whole-batch forward with flash varlen attention (trainer default)")
+    parser.add_argument("--no-batched", dest="batched", action="store_false",
+                        help="Vendored per-sample loop (pre-optimization path)")
+    parser.add_argument("--selective-checkpointing", default="off",
+                        choices=["off", "attention", "matmul"])
+    parser.add_argument("--compile", action="store_true",
+                        help="Per-DiT-block torch.compile (trainer semantics)")
     parser.add_argument("--compile-mode", default="default")
     parser.add_argument("--sdpa-backend", default="auto",
                         choices=["auto", "flash", "efficient", "math", "cudnn"])
@@ -90,10 +98,21 @@ def main(argv: list[str] | None = None) -> None:
     adapters = inject_lora(transformer, rank=args.rank, alpha=args.alpha)
     if args.checkpointing:
         transformer.enable_gradient_checkpointing()
+    if args.selective_checkpointing != "off":
+        if not args.checkpointing:
+            raise RuntimeError("--selective-checkpointing requires --checkpointing")
+        transformer.enable_selective_checkpointing(args.selective_checkpointing)
+    if args.batched:
+        transformer.enable_batched_forward()
     trainable = [param for name, param in unwrap_model(transformer).named_parameters() if param.requires_grad]
     optimizer = torch.optim.AdamW(trainable, lr=1e-4, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.01,
                                   fused=device.type == "cuda")
-    model = torch.compile(transformer, dynamic=True, mode=args.compile_mode) if args.compile else transformer
+    if args.compile:
+        # Per-block compile, exactly as in the trainer: whole-model compile graph-breaks
+        # inside the checkpointed loop and silently falls back to eager.
+        for index, layer in enumerate(transformer.layers):
+            transformer.layers[index] = torch.compile(layer, dynamic=True, mode=args.compile_mode)
+    model = transformer
 
     latent_h, latent_w = args.height // 16, args.width // 16
     x0 = torch.randn(args.batch_size, transformer.config.latent_channels, latent_h, latent_w,
@@ -101,17 +120,21 @@ def main(argv: list[str] | None = None) -> None:
     context = torch.randn(args.batch_size, args.text_length, transformer.config.text_dim,
                           device=device, dtype=dtype)
     mask = torch.ones(args.batch_size, args.text_length, dtype=torch.bool, device=device)
-    timesteps = torch.randint(1, NUM_TIMESTEPS + 1, (args.batch_size,), device=device, dtype=torch.float32)
+    # Fixed integer timesteps (python list -> CPU/table path, as in the trainer).
+    generator = torch.Generator().manual_seed(42)
+    timesteps = torch.randint(1, NUM_TIMESTEPS + 1, (args.batch_size,), generator=generator).tolist()
+    sigma = torch.tensor([t / NUM_TIMESTEPS for t in timesteps], device=device,
+                         dtype=torch.float32).view(-1, 1, 1, 1)
 
     transformer.train()
     reset_peak_vram()
 
     def step() -> None:
-        noise = torch.randn_like(x0)
-        noisy = (1.0 - timesteps / NUM_TIMESTEPS) * x0 + (timesteps / NUM_TIMESTEPS) * noise
+        noise = torch.randn(x0.shape, device=device, dtype=torch.float32)
+        noisy = (1.0 - sigma) * x0 + sigma * noise
         with sdpa_context(args.sdpa_backend):
             prediction = model(noisy, timesteps, context, mask, return_dict=False)[0]
-        loss = torch.mean((prediction.float() - (noise - x0)) ** 2)
+        loss = F.mse_loss(prediction.float(), noise - x0)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(trainable, 1.0)
         optimizer.step()
@@ -136,6 +159,8 @@ def main(argv: list[str] | None = None) -> None:
         "rank": args.rank,
         "alpha": args.alpha,
         "checkpointing": args.checkpointing,
+        "batched": args.batched,
+        "selective_checkpointing": args.selective_checkpointing,
         "compile": args.compile,
         "sdpa_backend": args.sdpa_backend,
         "dtype": args.dtype,
@@ -152,7 +177,8 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(result, indent=2))
     else:
         print(f"config: {args.height}x{args.width} bs={args.batch_size} rank={args.rank} "
-              f"ckpt={args.checkpointing} compile={args.compile} backend={args.sdpa_backend}")
+              f"ckpt={args.checkpointing} batched={args.batched} "
+              f"sac={args.selective_checkpointing} compile={args.compile} backend={args.sdpa_backend}")
         print(f"s/step: {result['sec_per_step']:.3f}   samples/s: {result['samples_per_sec']:.2f}")
         print(f"peak allocated: {result['peak_allocated_gb']} GiB   "
               f"peak reserved: {result['peak_reserved_gb']} GiB")
