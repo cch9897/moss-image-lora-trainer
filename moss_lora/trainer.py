@@ -15,13 +15,16 @@ import json
 import math
 import os
 import random
+import shutil
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import torch
 from safetensors.torch import safe_open
+from torch.nn import functional as F
 
 from moss_lora import __version__
 from moss_lora.config import TrainerConfig, apply_cli_overrides, load_config
@@ -150,8 +153,12 @@ class ParamEMA:
 
     @torch.no_grad()
     def update(self, named_params: list[tuple[str, torch.nn.Parameter]]) -> None:
-        for name, param in named_params:
-            self.shadow[name].mul_(self.decay).add_(param.detach().float(), alpha=1.0 - self.decay)
+        # Fused foreach ops: one kernel per step instead of two per parameter
+        # (hundreds of tiny LoRA tensors).
+        shadows = [self.shadow[name] for name, _ in named_params]
+        params = [param.detach().float() for _, param in named_params]
+        torch._foreach_mul_(shadows, self.decay)
+        torch._foreach_add_(shadows, params, alpha=1.0 - self.decay)
 
     @torch.no_grad()
     def apply(self, named_params: list[tuple[str, torch.nn.Parameter]]) -> dict[str, torch.Tensor]:
@@ -209,8 +216,54 @@ def export_comfy_adapter(adapter: str | Path,
     return summary
 
 
+def _checkpoint_step(path: Path) -> int:
+    try:
+        return int(path.name.split("_", 1)[1])
+    except (IndexError, ValueError):
+        return -1
+
+
+def _is_epoch_end_checkpoint(path: Path) -> bool:
+    state = path / TRAINER_STATE_NAME
+    if not state.is_file():
+        return False
+    try:
+        payload = json.loads(state.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(payload.get("epoch_end"))
+
+
+def prune_checkpoints(output_dir: str | Path, keep_last: int) -> list[Path]:
+    """Keep the newest ``keep_last`` step checkpoints and every epoch-end checkpoint."""
+    if keep_last <= 0:
+        return []
+    root = Path(output_dir) / CHECKPOINTS_DIR
+    if not root.is_dir():
+        return []
+    candidates = [path for path in root.glob("step_*")
+                  if path.is_dir() and (path / TRAINER_STATE_NAME).is_file()]
+    candidates.sort(key=_checkpoint_step)
+    if not candidates:
+        return []
+    epoch_end = {path for path in candidates if _is_epoch_end_checkpoint(path)}
+    regular = [path for path in candidates if path not in epoch_end]
+    keep = set(regular[-keep_last:]) | epoch_end
+    removed: list[Path] = []
+    for path in candidates:
+        if path in keep:
+            continue
+        try:
+            shutil.rmtree(path)
+            removed.append(path)
+        except OSError as error:
+            print(f"WARNING: failed to prune {path}: {error}", file=sys.stderr)
+    return removed
+
+
 def save_checkpoint(config: TrainerConfig, model: MOSSImageTransformer, optimizer, lr_scheduler,
-                    ema: ParamEMA | None, step: int, epoch: int, batch_index: int) -> Path:
+                    ema: ParamEMA | None, step: int, epoch: int, batch_index: int,
+                    *, epoch_end: bool = False) -> Path:
     directory = checkpoint_dir(config.train.output_dir, step)
     save_adapter(unwrap_model(model), directory,
                  base_model=str(config.model.path), revision=config.model.revision)
@@ -225,8 +278,10 @@ def save_checkpoint(config: TrainerConfig, model: MOSSImageTransformer, optimize
     save_rng_state(directory / RNG_NAME)
     atomic_write_json(directory / TRAINER_STATE_NAME, {
         "step": step, "epoch": epoch, "batch_index": batch_index,
+        "epoch_end": bool(epoch_end),
         "moss_lora_version": __version__, "config": config.to_dict(),
     })
+    prune_checkpoints(config.train.output_dir, config.train.keep_last_checkpoints)
     return directory
 
 
@@ -345,6 +400,10 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
             f"Trainable parameter check failed: {len(trainable_named)} params, unexpected={unexpected[:5]}")
     if config.train.gradient_checkpointing:
         transformer.enable_gradient_checkpointing()
+    if config.train.selective_checkpointing != "off":
+        transformer.enable_selective_checkpointing(config.train.selective_checkpointing)
+    if config.train.batched_forward:
+        transformer.enable_batched_forward()
     trainable = [param for _, param in trainable_named]
 
     optimizer = torch.optim.AdamW(
@@ -353,10 +412,20 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
         fused=device.type == "cuda")
     lr_scheduler = build_lr_scheduler(optimizer, config.train)
     ema = ParamEMA(trainable_named, config.train.ema_decay) if config.train.ema_decay > 0 else None
-    model = (torch.compile(transformer, dynamic=True, mode=config.train.compile_mode)
-             if config.train.compile else transformer)
+    if config.train.compile:
+        # Compile each DiT block instead of the whole transformer: whole-model compile
+        # hits graph breaks inside the checkpointed block loop and falls back to eager,
+        # while per-block compile fuses the norm/activation/LoRA elementwise chains and
+        # composes with gradient checkpointing (~2x on the batched path). All blocks
+        # share one code object, so dynamo compiles the graph once and reuses it.
+        # Done after trainable_named/EMA capture so adapter/EMA keys stay clean
+        # (OptimizedModule would prefix names with _orig_mod).
+        for index, layer in enumerate(transformer.layers):
+            transformer.layers[index] = torch.compile(layer, dynamic=True, mode=config.train.compile_mode)
+    model = transformer
 
-    dataset = CachedDataset(config.data.cache_dir)
+    dataset = CachedDataset(config.data.cache_dir,
+                            variant_weights=config.data.resolved_variant_weights() or None)
     buckets = [(item["bucket_h"], item["bucket_w"]) for item in dataset.items]
     sampler = BucketBatchSampler(buckets, config.data.batch_size, drop_last=config.data.drop_last,
                                  seed=config.train.seed)
@@ -365,6 +434,15 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
     if resume_path:
         start_step, start_epoch, start_batch = resume_checkpoint(
             config, transformer, optimizer, lr_scheduler, ema, resume_path)
+        # The saved optimizer LR follows the old schedule and can be exactly 0
+        # at a completed run boundary; restore the new schedule's value at the
+        # resumed step so the first optimizer step is not a zero-LR no-op.
+        if float(lr_scheduler.get_last_lr()[0]) <= 0.0:
+            resumed_lr = float(max(lr_scheduler.get_lr()))
+            for group in optimizer.param_groups:
+                group["lr"] = resumed_lr
+            print(f"[resume] optimizer lr was 0 after load; set to {resumed_lr:.3e} "
+                  f"at step {start_step}")
 
     vae = None
     if config.logging.sample_every > 0 and config.logging.sample_val_ids:
@@ -374,7 +452,8 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
     micro_in_epoch = start_batch
     completed_step = start_step
     epoch = start_epoch
-    loss_accum = 0.0
+    loss_accum = torch.zeros((), device=device)
+    variant_counts: Counter[str] = Counter()
     t_last = time.perf_counter()
 
     if start_step == 0 and config.logging.sample_every > 0 and config.logging.sample_val_ids:
@@ -396,17 +475,24 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
             x0 = batch["latents"].to(device, non_blocking=True)
             context = batch["text"].to(device, non_blocking=True)
             mask = batch["mask"].to(device, non_blocking=True)
-            noise = torch.randn_like(x0)
+            variant_counts.update(batch.get("variant_kinds", []))
+            # fp32 noise/target match the inference contract and keep the flow-matching
+            # target out of bf16 rounding even when the latent cache is bf16.
+            noise = torch.randn(x0.shape, device=device, dtype=torch.float32)
             timesteps = [sample_timestep(random, config.train) for _ in range(x0.shape[0])]
             sigma = torch.tensor([t / NUM_TIMESTEPS for t in timesteps], device=device,
                                  dtype=torch.float32).view(-1, 1, 1, 1)
-            noisy = (1.0 - sigma) * x0 + sigma * noise
+            x0_fp32 = x0.float()
+            noisy = (1.0 - sigma) * x0_fp32 + sigma * noise
             with sdpa_context(config.train.sdpa_backend):
-                prediction = model(noisy, torch.tensor(timesteps, device=device, dtype=torch.float32),
-                                   context, mask, return_dict=False)[0]
-            loss = torch.mean((prediction.float() - (noise - x0)) ** 2) / accum
+                # Passing the python list keeps the timestep sinusoid on the CPU/table
+                # path instead of launching fp64 kernels on the GPU every step.
+                prediction = model(noisy, timesteps, context, mask, return_dict=False)[0]
+            loss = F.mse_loss(prediction.float(), noise - x0_fp32) / accum
             loss.backward()
-            loss_accum += float(loss.detach())
+            # Accumulate on-device: a per-step .item() would force a GPU sync and
+            # serialize the CPU launch pipeline. Synced only at log boundaries below.
+            loss_accum += loss.detach()
             micro_in_epoch += 1
             if micro_in_epoch % accum:
                 continue
@@ -417,13 +503,15 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
             if ema is not None:
                 ema.update(trainable_named)
             completed_step += 1
-            loss_value = loss_accum * accum
-            loss_accum = 0.0
-            if not math.isfinite(loss_value):
-                raise RuntimeError(
-                    f"Loss became {loss_value} at step {completed_step}; try a lower learning rate.")
             if (completed_step % max(1, config.logging.log_every) == 0
                     or completed_step == config.train.max_steps):
+                loss_value = float(loss_accum) * accum
+                loss_accum.zero_()
+                # Non-finite detection happens at log boundaries (no per-step sync);
+                # a diverged run still aborts here before it can do much more damage.
+                if not math.isfinite(loss_value):
+                    raise RuntimeError(
+                        f"Loss became {loss_value} at step {completed_step}; try a lower learning rate.")
                 now = time.perf_counter()
                 metrics.log({
                     "step": completed_step,
@@ -433,7 +521,10 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
                     "grad_norm": f"{float(grad_norm):.4f}",
                     "sec_per_step": f"{(now - t_last) / max(1, config.logging.log_every):.3f}",
                     "peak_vram_gb": f"{peak_vram_gb():.2f}",
+                    "variant_histogram": json.dumps(dict(sorted(variant_counts.items())),
+                                                    separators=(",", ":")),
                 })
+                variant_counts.clear()
                 t_last = now
             if (config.logging.sample_every > 0 and config.logging.sample_val_ids
                     and completed_step % config.logging.sample_every == 0):
@@ -450,12 +541,20 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
                 break
         if micro_in_epoch % accum:  # drop a partial accumulation at the epoch boundary
             optimizer.zero_grad(set_to_none=True)
-            loss_accum = 0.0
+            loss_accum.zero_()
+        if config.train.save_epoch and completed_step < config.train.max_steps:
+            # batch_index is the resume cursor: the epoch just finished, so the
+            # next micro-batch is the first one of the following epoch.
+            save_checkpoint(config, transformer, optimizer, lr_scheduler, ema,
+                            completed_step, epoch + 1, 0, epoch_end=True)
         epoch += 1
         micro_in_epoch = 0
 
+    finished_epoch = len(sampler) > 0 and micro_in_epoch >= len(sampler)
     final_dir = save_checkpoint(config, transformer, optimizer, lr_scheduler, ema,
-                                completed_step, epoch, micro_in_epoch)
+                                completed_step, epoch + 1 if finished_epoch else epoch,
+                                0 if finished_epoch else micro_in_epoch,
+                                epoch_end=config.train.save_epoch)
     save_adapter(unwrap_model(transformer), output_dir,
                  base_model=str(config.model.path), revision=config.model.revision)
     if ema is not None:
@@ -467,7 +566,30 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
     return {"steps": completed_step, "checkpoint": str(final_dir), "output_dir": str(output_dir)}
 
 
+def _raise_fd_limit() -> None:
+    """Raise RLIMIT_NOFILE before CUDA init.
+
+    On WSL2 each ``expandable_segments`` VMM mapping (cuMemCreate/cuMemMap/
+    cuMemSetAccess) consumes one dxg file descriptor: a bs8 step peaks at
+    ~1700 fds. With the default soft limit (1024) the mapping call fails with
+    CUDA_ERROR_UNKNOWN and surfaces as ``CUDA driver error: unknown error``
+    from whichever allocation happens next.
+    """
+    try:
+        import resource
+    except ImportError:  # non-POSIX platform
+        return
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = 65536 if hard == resource.RLIM_INFINITY else min(65536, hard)
+        if soft != resource.RLIM_INFINITY and soft < target:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (ValueError, OSError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> None:
+    _raise_fd_limit()
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     parser = argparse.ArgumentParser(prog="moss-lora-train",
                                      description="LoRA fine-tuning for MOSS-Image-Base.")

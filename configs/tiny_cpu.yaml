@@ -25,6 +25,8 @@ train:
   max_grad_norm: 1.0
   seed: 42
   gradient_checkpointing: true
+  batched_forward: true
+  selective_checkpointing: "off"
   compile: false
   compile_mode: default
   sdpa_backend: auto

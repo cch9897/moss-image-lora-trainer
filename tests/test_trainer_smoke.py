@@ -165,3 +165,38 @@ def test_base_config_dict_matches_dataclasses(tmp_path):
     path.write_text(yaml.safe_dump(base_config_dict()), encoding="utf-8")
     config = load_config(path)
     assert config.train.seed == 42
+
+
+def test_epoch_end_checkpoint_resumes_at_next_epoch(tmp_path, tiny_config):
+    """An epoch-end checkpoint is full-state and resumes without re-entering a finished epoch."""
+    config = load_config(tiny_config)
+    config.train.max_steps = 3  # tiny cache: three batches per epoch
+    config.train.save_epoch = True
+    config.logging.save_every = 100
+    config.logging.sample_every = 0
+    config.logging.sample_val_ids = []
+    first = trainer.train(config)
+    assert first["steps"] == 3
+    run_dir = Path(first["output_dir"])
+    epoch_checkpoint = run_dir / "checkpoints" / "step_000003"
+    for name in ("adapter_model.safetensors", "optimizer.pt", "lr_scheduler.pt", "rng.pt",
+                 "trainer_state.json"):
+        assert (epoch_checkpoint / name).is_file(), name
+    state = json.loads((epoch_checkpoint / "trainer_state.json").read_text())
+    assert state["epoch_end"] is True
+    assert (state["epoch"], state["batch_index"]) == (1, 0)
+
+    resume_config = load_config(tiny_config)
+    resume_config.train.max_steps = 6
+    resume_config.train.save_epoch = True
+    resume_config.logging.save_every = 100
+    resume_config.logging.sample_every = 0
+    resume_config.logging.sample_val_ids = []
+    result = trainer.train(resume_config, resume_path=str(run_dir))
+    assert result["steps"] == 6
+    final_state = json.loads((run_dir / "checkpoints" / "step_000006"
+                              / "trainer_state.json").read_text())
+    assert final_state["epoch_end"] is True
+    assert (final_state["epoch"], final_state["batch_index"]) == (2, 0)
+    rows = _read_metrics(run_dir / "metrics.csv")
+    assert [row["step"] for row in rows] == ["1", "2", "3", "4", "5", "6"]

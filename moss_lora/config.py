@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,43 @@ class DataConfig:
     batch_size: int = 1
     drop_last: bool = True
     pin_memory: bool = True
+    # Absolute per-kind weights for the five v2 variants; empty = use each item's
+    # index weights (or uniform for old caches).
+    variant_weights: dict[str, float] = field(default_factory=dict)
+    # Optional convenience: layout_weight is absolute (0-0.3), original_weight is
+    # the original share of the remaining caption branch (spec 5.1).
+    layout_weight: float | None = None
+    original_weight: float | None = None
+
+    def __post_init__(self) -> None:
+        self.variant_weights = {str(key): float(value)
+                                for key, value in (self.variant_weights or {}).items()}
+        for key, value in self.variant_weights.items():
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"data.variant_weights[{key!r}] must be finite and >= 0")
+        if self.variant_weights and sum(self.variant_weights.values()) <= 0:
+            raise ValueError("data.variant_weights must contain at least one positive weight")
+        if self.layout_weight is not None and not 0.0 <= self.layout_weight <= 0.3:
+            raise ValueError("data.layout_weight must be in [0, 0.3]")
+        if self.original_weight is not None and not 0.0 <= self.original_weight <= 1.0:
+            raise ValueError("data.original_weight must be in [0, 1]")
+
+    def resolved_variant_weights(self) -> dict[str, float]:
+        """Absolute weights for all kinds, or ``{}`` to keep per-item index weights."""
+        if self.variant_weights:
+            return dict(self.variant_weights)
+        if self.layout_weight is None and self.original_weight is None:
+            return {}
+        layout = 0.20 if self.layout_weight is None else float(self.layout_weight)
+        original_share = 0.20 if self.original_weight is None else float(self.original_weight)
+        caption_share = 1.0 - layout
+        return {
+            "original": original_share * caption_share,
+            "long": caption_share * (1.0 - original_share) / 3.0,
+            "medium": caption_share * (1.0 - original_share) / 3.0,
+            "short": caption_share * (1.0 - original_share) / 3.0,
+            "layout": layout,
+        }
 
 
 @dataclass
@@ -62,6 +100,15 @@ class TrainConfig:
     max_grad_norm: float = 1.0
     seed: int = 42
     gradient_checkpointing: bool = True
+    # Selective activation checkpointing: save expensive op outputs (attention, and
+    # optionally matmuls) across the checkpoint boundary and recompute only the cheap
+    # elementwise chains. "off" | "attention" | "matmul". Trades extra VRAM for less
+    # recompute; "matmul" costs the most memory. Requires gradient_checkpointing.
+    selective_checkpointing: str = "off"
+    # Whole-batch forward with masked padding (mathematically equivalent to the
+    # per-sample loop, much faster for batch_size > 1). False restores the vendored
+    # per-sample path bit-for-bit.
+    batched_forward: bool = True
     compile: bool = False
     compile_mode: str = "default"
     sdpa_backend: str = "auto"
@@ -71,9 +118,21 @@ class TrainConfig:
     logit_normal_std: float = 0.95
     sigma_cutoff: float = 0.95
     uniform_mix: float = 0.01
+    keep_last_checkpoints: int = 0
+    save_epoch: bool = False
 
     def __post_init__(self):
         self.betas = tuple(self.betas)  # YAML lists -> tuple
+        if self.keep_last_checkpoints < 0:
+            raise ValueError("train.keep_last_checkpoints must be >= 0")
+        if self.selective_checkpointing is False:  # YAML 1.1 parses unquoted `off` as False
+            self.selective_checkpointing = "off"
+        if self.selective_checkpointing not in ("off", "attention", "matmul"):
+            raise ValueError(
+                "train.selective_checkpointing must be off/attention/matmul, "
+                f"got {self.selective_checkpointing!r}")
+        if self.selective_checkpointing != "off" and not self.gradient_checkpointing:
+            raise ValueError("train.selective_checkpointing requires gradient_checkpointing: true")
 
 
 @dataclass

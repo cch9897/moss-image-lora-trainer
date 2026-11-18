@@ -28,7 +28,30 @@ from moss_lora.utils import (
 NUM_TIMESTEPS = 1000
 
 
+def _raise_fd_limit() -> None:
+    """Raise RLIMIT_NOFILE before CUDA init.
+
+    On WSL2 each ``expandable_segments`` VMM mapping (cuMemCreate/cuMemMap/
+    cuMemSetAccess) consumes one dxg file descriptor: a bs8 step peaks at
+    ~1700 fds. With the default soft limit (1024) the mapping call fails with
+    CUDA_ERROR_UNKNOWN and surfaces as ``CUDA driver error: unknown error``
+    from whichever allocation happens next.
+    """
+    try:
+        import resource
+    except ImportError:  # non-POSIX platform
+        return
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = 65536 if hard == resource.RLIM_INFINITY else min(65536, hard)
+        if soft != resource.RLIM_INFINITY and soft < target:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (ValueError, OSError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> None:
+    _raise_fd_limit()
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     parser = argparse.ArgumentParser(prog="moss-lora-bench",
                                      description="Synthetic LoRA training-step benchmark for MOSS-Image.")

@@ -11,11 +11,15 @@ This repository includes vendored third-party code:
     Changes:   documented in the file header: Apache-2.0/provenance comment,
                `import torch.utils.checkpoint`, `gradient_checkpointing` flag plus
                enable/disable methods on MOSSImageTransformer, checkpointed main-block
-               loop, and the transformers import moved into
+               loop, the transformers import moved into
                MOSSImagePipeline.from_components_pretrained so the module imports with
-               only torch and diffusers. No math, module structure, state-dict keys,
-               scheduler, or pipeline behavior was modified; a unit test diffs the file
-               against upstream and allows only these changes.
+               only torch and diffusers, a single-cast _RMSNorm rewrite, a 16-entry
+               RoPE memoization cache, and cached fp64 timestep frequencies with a
+               precomputed integer-timestep sinusoid table. The last three are
+               bit-identical rewrites/caches: no math, module structure, state-dict
+               keys, scheduler, or pipeline behavior was modified; a unit test diffs
+               the file against upstream and allows only these changes, and parity
+               tests assert bit-identical outputs on CPU and CUDA.
 
 The MOSS-Image-Base model weights, tokenizer and text encoder are distributed by
 OpenMOSS-Team under the license shipped with that repository; this project neither

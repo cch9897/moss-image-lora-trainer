@@ -27,9 +27,38 @@
 #   6. `from transformers import AutoModel, AutoTokenizer` moved from module level into
 #      MOSSImagePipeline.from_components_pretrained (its only use), so importing this module
 #      requires only torch and diffusers.
+#   7. _RMSNorm.forward reuses a single x.float() cast (identical math, one fewer kernel).
+#   8. _RoPE.forward memoizes results per (height, width, text_length, device) in a
+#      16-entry LRU dict (_rope_cache, cleared in _apply). Cached tensors are constants
+#      and are only read downstream, so outputs are bit-identical to upstream.
+#   9. The timestep sinusoid is factored into _time_freq/_time_embedding_input: fp64
+#      frequencies are cached per device, and CPU-provided integer timesteps in [0, 1000]
+#      index a per-device [1001, freq_dim] fp32 table built with the identical fp64 math
+#      on that device (bit-identical outputs). CUDA-tensor timesteps keep the original
+#      inline computation. The caches are plain attributes: no state-dict keys added.
+#  10. Optional batched training forward: _attention/_TextBlock/_TextProjection/_Block
+#      gain an additive attn_mask=None parameter (None keeps the exact upstream call),
+#      MOSSImageTransformer gains _batched_forward (default False) with
+#      enable_batched_forward()/disable_batched_forward(), forward dispatches to the
+#      new forward_batched when the flag is set, _RoPE gains forward_batched building
+#      per-sample RoPE (image f-coordinate = the sample's true text length), and
+#      forward_batched evaluates the whole batch in one pass with padding keys masked
+#      in SDPA (on CUDA the prefix key mask is served by the aten flash varlen op on
+#      packed sequences, wrapped in torch.compiler.allow_in_graph; other devices use
+#      a boolean attn_mask). It is mathematically
+#      equivalent to the per-sample loop (real tokens see identical RoPE positions and
+#      identical unmasked keys) but not bit-identical: batched GEMMs/SDPA may round
+#      differently. The default per-sample forward stays bit-identical to upstream.
+#  11. Optional selective activation checkpointing (default off): _sac_policy attribute
+#      with enable_selective_checkpointing(policy)/disable_selective_checkpointing(),
+#      module-level _make_sac_context_fn building a MUST_SAVE policy for attention
+#      (and, with policy='matmul', mm/addmm/bmm) outputs, and _checkpoint_kwargs
+#      threading context_fn into both checkpoint call sites. Gradients are unchanged;
+#      only the save/recompute split differs.
 #
-# No math, module structure, state-dict keys, scheduler or pipeline behavior is changed; the
-# file is otherwise byte-identical to upstream.
+# No math, module structure, state-dict keys, scheduler or pipeline behavior is changed
+# (modifications 7-9 are bit-identical rewrites/caches); the file is otherwise
+# byte-identical to upstream.
 """MOSSImage modeling and text-to-image pipeline (no Motor/TorchTitan imports).
 
 Dependencies: torch>=2.9, diffusers>=0.38, transformers>=5.3, safetensors,
@@ -69,6 +98,7 @@ inference pipeline is not a release requirement.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from pathlib import Path
 
 import torch
@@ -91,7 +121,8 @@ class _RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        y = x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + 1e-6)
+        xf = x.float()
+        y = xf * torch.rsqrt(xf.square().mean(-1, keepdim=True) + 1e-6)
         return y.to(x.dtype) * self.weight
 
 
@@ -114,12 +145,61 @@ def _rotate(x, rope):
     return x * cos + torch.cat((-b, a), -1) * sin
 
 
-def _attention(q, k, v, rope, heads):
+def _sdpa_varlen(q, k, v, lengths):
+    # q, k, v: [B, heads, S, hd] padded prefix layout; lengths: [B] true lengths.
+    # aten flash varlen on packed [total, heads, hd] tensors: no padding keys, no
+    # attention mask, no S^2 materialization, native flash backward. max_q/max_k are
+    # scheduling hints, so the padded S is passed without any host sync.
+    batch, heads, seq, head_dim = q.shape
+    offsets = torch.zeros(batch + 1, dtype=torch.int32, device=q.device)
+    offsets[1:] = lengths.cumsum(0)
+    keep = torch.arange(seq, device=q.device)[None, :] < lengths[:, None]
+    positions = (torch.arange(batch, device=q.device)[:, None] * seq
+                 + torch.arange(seq, device=q.device)[None, :])[keep]
+    qv, kv, vv = (t.transpose(1, 2)[keep] for t in (q, k, v))
+    out = torch.ops.aten._flash_attention_forward(
+        qv, kv, vv, offsets, offsets, seq, seq, 0.0, False, False)[0]
+    dense = out.new_zeros(batch * seq, heads, head_dim)
+    dense[positions] = out
+    return dense.view(batch, seq, heads * head_dim)
+
+
+# Keep the varlen attention opaque to torch.compile; autograd flows through the
+# aten flash op's registered backward.
+_sdpa_varlen = torch.compiler.allow_in_graph(_sdpa_varlen)
+
+
+def _make_sac_context_fn(policy):
+    save_ops = {torch.ops.aten._scaled_dot_product_flash_attention.default,
+                torch.ops.aten._scaled_dot_product_efficient_attention.default,
+                torch.ops.aten._scaled_dot_product_cudnn_attention.default,
+                torch.ops.aten._flash_attention_forward.default}
+    if policy == 'matmul':
+        save_ops |= {torch.ops.aten.mm.default, torch.ops.aten.addmm.default, torch.ops.aten.bmm.default}
+
+    def policy_fn(ctx, op, *args, **kwargs):
+        if op in save_ops or getattr(op, '__name__', '') == '_sdpa_varlen':
+            return torch.utils.checkpoint.CheckpointPolicy.MUST_SAVE
+        return torch.utils.checkpoint.CheckpointPolicy.PREFER_RECOMPUTE
+
+    def context_fn():
+        return torch.utils.checkpoint.create_selective_checkpoint_contexts(policy_fn)
+
+    return context_fn
+
+
+def _attention(q, k, v, rope, heads, attn_mask=None):
     shape = (*q.shape[:2], heads, q.shape[-1] // heads)
     q = _rotate(q.reshape(shape), rope).transpose(1, 2)
     k = _rotate(k.reshape(shape), rope).transpose(1, 2)
     v = v.reshape(shape).transpose(1, 2)
-    return F.scaled_dot_product_attention(q.to(v.dtype), k.to(v.dtype), v).transpose(1, 2).flatten(2)
+    if (q.is_cuda and q.dtype in (torch.float16, torch.bfloat16)
+            and attn_mask is not None and attn_mask.dtype == torch.bool
+            and attn_mask.dim() == 4 and attn_mask.shape[1] == 1 and attn_mask.shape[2] == 1):
+        # Prefix key mask from forward_batched: exact per-sample varlen attention.
+        return _sdpa_varlen(q.to(v.dtype), k.to(v.dtype), v, attn_mask.sum(-1).view(q.shape[0]))
+    return F.scaled_dot_product_attention(q.to(v.dtype), k.to(v.dtype), v,
+                                          attn_mask=attn_mask).transpose(1, 2).flatten(2)
 
 
 class _TextBlock(nn.Module):
@@ -133,11 +213,11 @@ class _TextBlock(nn.Module):
         self.ffn_gate, self.ffn_up = nn.Linear(dim, ffn_dim), nn.Linear(dim, ffn_dim)
         self.ffn_down = nn.Linear(ffn_dim, dim)
 
-    def forward(self, x, rope):
+    def forward(self, x, rope, attn_mask=None):
         q, k, v = self.qkv(self.norm1(x)).chunk(3, -1)
         q = self.q_norm(q.unflatten(-1, (self.heads, -1))).flatten(2)
         k = self.k_norm(k.unflatten(-1, (self.heads, -1))).flatten(2)
-        x = x + self.proj(_attention(q, k, v, rope, self.heads))
+        x = x + self.proj(_attention(q, k, v, rope, self.heads, attn_mask))
         y = self.norm2(x)
         return x + self.ffn_down(_situ(self.ffn_up(y), self.ffn_gate(y)))
 
@@ -148,10 +228,10 @@ class _TextProjection(nn.Module):
         self.proj = nn.Linear(text_dim, dim)
         self.blocks = nn.ModuleList([_TextBlock(dim, ffn_dim, heads) for _ in range(2)])
 
-    def forward(self, x, rope):
+    def forward(self, x, rope, attn_mask=None):
         x = self.proj(x.to(self.proj.weight.dtype))
         for block in self.blocks:
-            x = block(x, rope)
+            x = block(x, rope, attn_mask)
         return x
 
 
@@ -167,14 +247,15 @@ class _Block(nn.Module):
         self.proj['ffn_up_gate'] = nn.Linear(dim, 2 * ffn_dim, bias=False)
         self.proj['ffn_down'] = nn.Linear(ffn_dim, dim, bias=False)
 
-    def forward(self, x, rope, modulation):
+    def forward(self, x, rope, modulation, attn_mask=None):
         shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = modulation.unbind(1)
         y = self.norm1(x) * (1 + scale_a[:, None]) + shift_a[:, None]
         dtype = self.proj['q'].weight.dtype
         y = y.to(dtype)
         q = self.q_norm(self.proj['q'](y).unflatten(-1, (self.heads, -1))).flatten(2)
         k = self.k_norm(self.proj['k'](y).unflatten(-1, (self.heads, -1))).flatten(2)
-        x = x + self.proj['o'](_attention(q, k, self.proj['v'](y), rope, self.heads)) * gate_a[:, None]
+        x = x + self.proj['o'](_attention(q, k, self.proj['v'](y), rope, self.heads,
+                                          attn_mask)) * gate_a[:, None]
         y = self.norm2(x) * (1 + scale_f[:, None]) + shift_f[:, None]
         hidden, gate = self.proj['ffn_up_gate'](y.to(dtype)).chunk(2, -1)
         return x + self.proj['ffn_down'](_situ(hidden, gate)) * gate_f[:, None]
@@ -186,6 +267,7 @@ class _RoPE(nn.Module):
         self.num_bands = head_dim // 8
         self.base = base
         self.register_buffer('bands', self._default_bands(torch.device('cpu')))
+        self._rope_cache = OrderedDict()
 
     def _default_bands(self, device):
         # Match training's CPU fp32 construction, including under meta init.
@@ -196,6 +278,8 @@ class _RoPE(nn.Module):
         super()._apply(fn, recurse=recurse)
         # .float() cannot recover frequencies already rounded by .to(bf16).
         self.bands = self._default_bands(self.bands.device)
+        if hasattr(self, '_rope_cache'):
+            self._rope_cache.clear()
         return self
 
     def _load_from_state_dict(self, *args, **kwargs):
@@ -207,6 +291,11 @@ class _RoPE(nn.Module):
         # Diffusers/Accelerate can install tensors directly, bypassing load hooks.
         if self.bands.dtype != torch.float32:
             self.bands = self._default_bands(device)
+        key = (height, width, text_length, str(device))
+        cached = self._rope_cache.get(key)
+        if cached is not None:
+            self._rope_cache.move_to_end(key)
+            return cached
         # Coordinates: (r, f, h, w); sequence order is image followed by text.
         h, w = torch.meshgrid(torch.arange(height, device=device), torch.arange(width, device=device), indexing='ij')
         image = torch.stack((torch.zeros_like(h), torch.full_like(h, text_length), h, w), -1).flatten(0, 1).float()
@@ -215,7 +304,33 @@ class _RoPE(nn.Module):
         text = torch.zeros(text_length, 4, device=device, dtype=torch.float32)
         text[:, 1] = torch.arange(text_length, device=device)
         phase = torch.cat((image, text), 0).unsqueeze(-1) * self.bands
-        return torch.cat((phase.sin(), phase.cos()), -2).flatten(-2).unsqueeze(0)
+        rope = torch.cat((phase.sin(), phase.cos()), -2).flatten(-2).unsqueeze(0)
+        self._rope_cache[key] = rope
+        while len(self._rope_cache) > 16:
+            self._rope_cache.popitem(last=False)
+        return rope
+
+    def forward_batched(self, height, width, text_length, lengths, device):
+        """Per-sample RoPE [B, H*W + text_length, head_dim] for the batched forward.
+
+        Image tokens carry f = lengths[b] (the sample's true text length) exactly as in
+        the scalar forward; text token j carries f = j. Real-token values are therefore
+        bit-identical to the per-sample rope. Not cached: lengths vary per batch.
+        """
+        if self.bands.dtype != torch.float32:
+            self.bands = self._default_bands(device)
+        lengths = torch.as_tensor(lengths, device=device, dtype=torch.float32).reshape(-1)
+        batch = lengths.shape[0]
+        h, w = torch.meshgrid(torch.arange(height, device=device), torch.arange(width, device=device), indexing='ij')
+        image = torch.stack((torch.zeros_like(h), torch.zeros_like(h), h, w), -1).flatten(0, 1).float()
+        image[:, 2] -= (height - 1) / 2
+        image[:, 3] -= (width - 1) / 2
+        image = image[None].expand(batch, height * width, 4).clone()
+        image[:, :, 1] = lengths[:, None]
+        text = torch.zeros(batch, text_length, 4, device=device, dtype=torch.float32)
+        text[:, :, 1] = torch.arange(text_length, device=device)
+        phase = torch.cat((image, text), 1).unsqueeze(-1) * self.bands
+        return torch.cat((phase.sin(), phase.cos()), -2).flatten(-2)
 
 
 class MOSSImageTransformer(ModelMixin, ConfigMixin):
@@ -229,6 +344,10 @@ class MOSSImageTransformer(ModelMixin, ConfigMixin):
                  text_dim=4096, freq_dim=256, latent_channels=128, rope_base=10000.0):
         super().__init__()
         self.gradient_checkpointing = False
+        self._batched_forward = False
+        self._sac_policy = None
+        self._freq_cache = {}
+        self._time_table_cache = {}
         if dim % num_heads or (dim // num_heads) % 8 or freq_dim % 2:
             raise ValueError('Require dim divisible by heads, head_dim divisible by 8, and even freq_dim.')
         self.video_embedder = nn.Linear(latent_channels, dim)
@@ -241,8 +360,109 @@ class MOSSImageTransformer(ModelMixin, ConfigMixin):
         self.final_linear_video = nn.Linear(dim, latent_channels, bias=False)
         self.video_head_modulation = nn.Linear(dim, 2 * dim)
 
+    def _time_freq(self, device):
+        key = str(device)
+        freq = self._freq_cache.get(key)
+        if freq is None:
+            half = self.config.freq_dim // 2
+            freq = 10000 ** (-torch.arange(half, device=device, dtype=torch.float64) / half)
+            self._freq_cache[key] = freq
+        return freq
+
+    def _time_embedding_input(self, times, device):
+        if times.device.type == 'cpu':
+            rounded = times.round()
+            if bool(((times == rounded) & (rounded >= 0) & (rounded <= 1000)).all()):
+                key = str(device)
+                table = self._time_table_cache.get(key)
+                if table is None:
+                    steps = torch.arange(1001, dtype=torch.float32).double()[:, None].to(device)
+                    phase = steps * self._time_freq(device)
+                    table = torch.cat((phase.cos(), phase.sin()), -1).float()
+                    self._time_table_cache[key] = table
+                return table[rounded.long().to(device)]
+        times = times.to(device)
+        freq = self._time_freq(times.device)
+        phase = times.double()[:, None] * freq
+        return torch.cat((phase.cos(), phase.sin()), -1).float()
+
     def enable_gradient_checkpointing(self):
         self.gradient_checkpointing = True
+
+    def enable_selective_checkpointing(self, policy='matmul'):
+        if policy not in ('attention', 'matmul'):
+            raise ValueError("selective checkpointing policy must be 'attention' or 'matmul'.")
+        self._sac_policy = policy
+
+    def disable_selective_checkpointing(self):
+        self._sac_policy = None
+
+    def _checkpoint_kwargs(self, batched):
+        kwargs = {'use_reentrant': False}
+        if batched:
+            # The varlen path is deterministic (no dropout, no RNG consumption);
+            # skip the recomputation metadata check.
+            kwargs['determinism_check'] = 'none'
+        if self._sac_policy is not None:
+            kwargs['context_fn'] = _make_sac_context_fn(self._sac_policy)
+        return kwargs
+
+    def enable_batched_forward(self):
+        self._batched_forward = True
+
+    def disable_batched_forward(self):
+        self._batched_forward = False
+
+    def forward_batched(self, hidden_states, timestep, encoder_hidden_states,
+                        encoder_attention_mask=None, return_dict=True, skip_layers=None):
+        """Whole-batch forward with padding keys masked; requires one shared (H, W).
+
+        Mathematically equivalent to the per-sample loop: image tokens carry the
+        sample's true text length in their RoPE f-coordinate and real text token j gets
+        position j (as in its own sample), while padding tokens are masked as attention
+        keys everywhere, so they cannot influence any real token. Padding queries still
+        attend to real keys (finite outputs, discarded). The mask must be binary [B, S];
+        only shapes are validated here so the path stays torch.compile-friendly.
+        """
+        skip_layers = _validate_skip_layers(skip_layers, len(self.layers))
+        if hidden_states.ndim != 4 or hidden_states.shape[1] != self.config.latent_channels:
+            raise ValueError('hidden_states must be [B, latent_channels, H, W].')
+        batch, _, height, width = hidden_states.shape
+        if encoder_hidden_states.ndim != 3 or encoder_hidden_states.shape[0] != batch:
+            raise ValueError('encoder_hidden_states must be [B, S, text_dim].')
+        mask = encoder_attention_mask
+        if mask is None:
+            mask = torch.ones(encoder_hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)
+        if mask.shape != encoder_hidden_states.shape[:2]:
+            raise ValueError('encoder_attention_mask must be a [B, S] mask.')
+        mask = mask.to(torch.bool)
+        tokens = height * width
+        times = torch.as_tensor(timestep, dtype=torch.float32).reshape(-1)
+        times = times.expand(batch)
+        embedding = self._time_embedding_input(times, hidden_states.device)
+        time = self.time_embedding(embedding.to(self.time_embedding[0].weight.dtype)).float()
+        mod = self.shared_block_modulation(time.to(self.shared_block_modulation.weight.dtype)).view(batch, 6, -1)
+        head = self.video_head_modulation(time.to(self.video_head_modulation.weight.dtype)).view(batch, 2, -1)
+        video = hidden_states.flatten(2).transpose(1, 2)
+        video = self.video_embedder(video.to(self.video_embedder.weight.dtype).contiguous())
+        rope = self.rope.forward_batched(height, width, encoder_hidden_states.shape[1],
+                                         mask.sum(1), hidden_states.device).to(video.dtype)
+        text = self.text_embedder(encoder_hidden_states, rope[:, tokens:], mask[:, None, None, :])
+        x = torch.cat((video, text), 1)
+        keys = torch.cat((torch.ones(batch, tokens, dtype=torch.bool, device=x.device), mask), 1)
+        attn_mask = keys[:, None, None, :]
+        for layer_index, layer in enumerate(self.layers):
+            if layer_index not in skip_layers:
+                if self.training and self.gradient_checkpointing:
+                    x = torch.utils.checkpoint.checkpoint(
+                        layer, x, rope, mod, attn_mask, **self._checkpoint_kwargs(True))
+                else:
+                    x = layer(x, rope, mod, attn_mask)
+        x = self.final_norm_video(x[:, :tokens].to(self.final_norm_video.weight.dtype))
+        x = x * (1 + head[:, 1, None]) + head[:, 0, None]
+        x = self.final_linear_video(x.to(self.final_linear_video.weight.dtype))
+        sample = x.transpose(1, 2).reshape(batch, -1, height, width)
+        return Transformer2DModelOutput(sample=sample) if return_dict else (sample,)
 
     def disable_gradient_checkpointing(self):
         self.gradient_checkpointing = False
@@ -257,6 +477,9 @@ class MOSSImageTransformer(ModelMixin, ConfigMixin):
 
     def forward(self, hidden_states, timestep, encoder_hidden_states,
                 encoder_attention_mask=None, return_dict=True, skip_layers=None):
+        if self._batched_forward:
+            return self.forward_batched(hidden_states, timestep, encoder_hidden_states,
+                                        encoder_attention_mask, return_dict, skip_layers)
         skip_layers = _validate_skip_layers(skip_layers, len(self.layers))
         if hidden_states.ndim != 4 or hidden_states.shape[1] != self.config.latent_channels:
             raise ValueError('hidden_states must be [B, latent_channels, H, W].')
@@ -268,13 +491,10 @@ class MOSSImageTransformer(ModelMixin, ConfigMixin):
             mask = torch.ones(encoder_hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)
         if mask.shape != encoder_hidden_states.shape[:2] or not torch.all((mask == 0) | (mask == 1)):
             raise ValueError('encoder_attention_mask must be a binary [B, S] mask.')
-        times = torch.as_tensor(timestep, device=hidden_states.device, dtype=torch.float32).reshape(-1)
+        times = torch.as_tensor(timestep, dtype=torch.float32).reshape(-1)
         times = times.expand(batch)
         # Training computes the sinusoid in float64 and feeds float32 into its MLP.
-        half = self.config.freq_dim // 2
-        freq = 10000 ** (-torch.arange(half, device=times.device, dtype=torch.float64) / half)
-        phase = times.double()[:, None] * freq
-        embedding = torch.cat((phase.cos(), phase.sin()), -1).float()
+        embedding = self._time_embedding_input(times, hidden_states.device)
         time = self.time_embedding(embedding.to(self.time_embedding[0].weight.dtype)).float()
         mod = self.shared_block_modulation(time.to(self.shared_block_modulation.weight.dtype)).view(batch, 6, -1)
         head = self.video_head_modulation(time.to(self.video_head_modulation.weight.dtype)).view(batch, 2, -1)
@@ -293,7 +513,7 @@ class MOSSImageTransformer(ModelMixin, ConfigMixin):
                 if layer_index not in skip_layers:
                     if self.training and self.gradient_checkpointing:
                         x = torch.utils.checkpoint.checkpoint(
-                            layer, x, rope, mod[index:index + 1], use_reentrant=False)
+                            layer, x, rope, mod[index:index + 1], **self._checkpoint_kwargs(False))
                     else:
                         x = layer(x, rope, mod[index:index + 1])
             x = self.final_norm_video(x[:, :height * width].to(self.final_norm_video.weight.dtype))

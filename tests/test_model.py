@@ -101,7 +101,8 @@ def test_vendored_matches_upstream_with_documented_changes():
     if not path.is_file():
         pytest.skip(f"upstream pipeline_moss_image.py not available at {path}")
     upstream = path.read_text(encoding="utf-8").splitlines()
-    vendored = Path("moss_lora/model/moss_image.py").read_text(encoding="utf-8").splitlines()
+    vendored_text = Path("moss_lora/model/moss_image.py").read_text(encoding="utf-8")
+    vendored = vendored_text.splitlines()
     diff = list(difflib.unified_diff(upstream, vendored, lineterm="", n=0))
     added = {line[1:].strip() for line in diff if line.startswith("+") and not line.startswith("+++")}
     removed = {line[1:].strip() for line in diff if line.startswith("-") and not line.startswith("---")}
@@ -109,9 +110,62 @@ def test_vendored_matches_upstream_with_documented_changes():
     assert removed == {
         "from transformers import AutoModel, AutoTokenizer",
         "x = layer(x, rope, mod[index:index + 1])",
+        # Local mod #7: single fp32 cast in _RMSNorm.
+        "y = x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + 1e-6)",
+        # Local mod #8: memoized RoPE return.
+        "return torch.cat((phase.sin(), phase.cos()), -2).flatten(-2).unsqueeze(0)",
+        # Local mod #9: timestep sinusoid factored into cached helpers.
+        "times = torch.as_tensor(timestep, device=hidden_states.device, dtype=torch.float32).reshape(-1)",
+        "half = self.config.freq_dim // 2",
+        "freq = 10000 ** (-torch.arange(half, device=times.device, dtype=torch.float64) / half)",
+        "phase = times.double()[:, None] * freq",
+        "embedding = torch.cat((phase.cos(), phase.sin()), -1).float()",
+        # Local mod #10: additive attn_mask=None pass-through (default stays identical).
+        "def _attention(q, k, v, rope, heads):",
+        "return F.scaled_dot_product_attention(q.to(v.dtype), k.to(v.dtype), v).transpose(1, 2).flatten(2)",
+        "def forward(self, x, rope):",
+        "x = x + self.proj(_attention(q, k, v, rope, self.heads))",
+        "x = block(x, rope)",
+        "def forward(self, x, rope, modulation):",
+        "x = x + self.proj['o'](_attention(q, k, self.proj['v'](y), rope, self.heads)) * gate_a[:, None]",
     }
 
     code_additions = {line for line in added if line and not line.startswith("#")}
+    # Mod #10: every line inside the new batched-forward methods is allowed as a block.
+    import ast
+
+    mod10_lines: set[str] = set()
+    for node in ast.walk(ast.parse(vendored_text)):
+        if isinstance(node, ast.FunctionDef) and node.name in {
+                "forward_batched", "enable_batched_forward", "disable_batched_forward",
+                "_sdpa_varlen", "_sdpa_varlen_fwd", "_make_sac_context_fn", "_checkpoint_kwargs",
+                "enable_selective_checkpointing", "disable_selective_checkpointing"}:
+            mod10_lines.update(line.strip() for line in vendored[node.lineno - 1:node.end_lineno])
+        if isinstance(node, ast.ClassDef) and node.name == "_VarlenSDPA":
+            mod10_lines.update(line.strip() for line in vendored[node.lineno - 1:node.end_lineno])
+    mod10_passthrough = {
+        "def _attention(q, k, v, rope, heads, attn_mask=None):",
+        "return F.scaled_dot_product_attention(q.to(v.dtype), k.to(v.dtype), v,",
+        "attn_mask=attn_mask).transpose(1, 2).flatten(2)",
+        "def forward(self, x, rope, attn_mask=None):",
+        "x = x + self.proj(_attention(q, k, v, rope, self.heads, attn_mask))",
+        "x = block(x, rope, attn_mask)",
+        "def forward(self, x, rope, modulation, attn_mask=None):",
+        "x = x + self.proj['o'](_attention(q, k, self.proj['v'](y), rope, self.heads,",
+        "attn_mask)) * gate_a[:, None]",
+        "self._batched_forward = False",
+        "self._sac_policy = None",
+        "layer, x, rope, mod[index:index + 1], **self._checkpoint_kwargs(False))",
+        "if self._batched_forward:",
+        "return self.forward_batched(hidden_states, timestep, encoder_hidden_states,",
+        "encoder_attention_mask, return_dict, skip_layers)",
+        "_sdpa_varlen = torch.compiler.allow_in_graph(_sdpa_varlen)",
+        "from torch.nn.attention import SDPBackend, sdpa_kernel",
+        "if (q.is_cuda and q.dtype in (torch.float16, torch.bfloat16)",
+        "and attn_mask is not None and attn_mask.dtype == torch.bool",
+        "and attn_mask.dim() == 4 and attn_mask.shape[1] == 1 and attn_mask.shape[2] == 1):",
+        "return _sdpa_varlen(q.to(v.dtype), k.to(v.dtype), v, attn_mask.sum(-1).view(q.shape[0]))",
+    }
     allowed_code = {
         "import torch.utils.checkpoint",
         "self.gradient_checkpointing = False",
@@ -124,8 +178,54 @@ def test_vendored_matches_upstream_with_documented_changes():
         "layer, x, rope, mod[index:index + 1], use_reentrant=False)",
         "else:",
         "x = layer(x, rope, mod[index:index + 1])",
+        # Local mod #7: single fp32 cast in _RMSNorm.
+        "xf = x.float()",
+        "y = xf * torch.rsqrt(xf.square().mean(-1, keepdim=True) + 1e-6)",
+        # Local mod #8: RoPE LRU cache.
+        "from collections import OrderedDict",
+        "self._rope_cache = OrderedDict()",
+        "if hasattr(self, '_rope_cache'):",
+        "self._rope_cache.clear()",
+        "key = (height, width, text_length, str(device))",
+        "cached = self._rope_cache.get(key)",
+        "if cached is not None:",
+        "self._rope_cache.move_to_end(key)",
+        "return cached",
+        "rope = torch.cat((phase.sin(), phase.cos()), -2).flatten(-2).unsqueeze(0)",
+        "self._rope_cache[key] = rope",
+        "while len(self._rope_cache) > 16:",
+        "self._rope_cache.popitem(last=False)",
+        "return rope",
+        # Local mod #9: cached fp64 frequencies + integer-timestep table.
+        "self._freq_cache = {}",
+        "self._time_table_cache = {}",
+        "def _time_freq(self, device):",
+        "key = str(device)",
+        "freq = self._freq_cache.get(key)",
+        "if freq is None:",
+        "half = self.config.freq_dim // 2",
+        "freq = 10000 ** (-torch.arange(half, device=device, dtype=torch.float64) / half)",
+        "self._freq_cache[key] = freq",
+        "return freq",
+        "def _time_embedding_input(self, times, device):",
+        "if times.device.type == 'cpu':",
+        "rounded = times.round()",
+        "if bool(((times == rounded) & (rounded >= 0) & (rounded <= 1000)).all()):",
+        "table = self._time_table_cache.get(key)",
+        "if table is None:",
+        "steps = torch.arange(1001, dtype=torch.float32).double()[:, None].to(device)",
+        "phase = steps * self._time_freq(device)",
+        "table = torch.cat((phase.cos(), phase.sin()), -1).float()",
+        "self._time_table_cache[key] = table",
+        "return table[rounded.long().to(device)]",
+        "times = times.to(device)",
+        "freq = self._time_freq(times.device)",
+        "phase = times.double()[:, None] * freq",
+        "return torch.cat((phase.cos(), phase.sin()), -1).float()",
+        "times = torch.as_tensor(timestep, dtype=torch.float32).reshape(-1)",
+        "embedding = self._time_embedding_input(times, hidden_states.device)",
     }
-    assert code_additions <= allowed_code
+    assert code_additions <= allowed_code | mod10_lines | mod10_passthrough
     assert len(code_additions) >= 10
 
 

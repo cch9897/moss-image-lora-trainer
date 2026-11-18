@@ -1,0 +1,67 @@
+# clean30 v4 (NSFW-recaptioned) 5 epochs, rank 64, 1M pixels, batch 8.
+# Exact step math (verified against the live cache index and BucketBatchSampler):
+#   20,953 cached items; drop_last drops the last partial batch PER BUCKET, so
+#   steps/epoch = sum(items_per_bucket // 8) = 2,614 (NOT 20,953 // 8 = 2,619).
+#   max_steps = 2,614 * 5 = 13,070.
+# Learning rate 1.5e-4: bs8 scaling from the bs3 1e-4 recipe (1e-4 * 8/3 ~= 2.7e-4
+#   linear; 1.5e-4 is the conservative sqrt-ish step to keep the larger batch stable).
+# Checkpoints: full state (adapter + optimizer + scheduler + RNG + trainer state) at
+#   every epoch end (2,614 / 5,228 / 7,842 / 10,456 / 13,070) and every 3,000 steps
+#   (3,000 / 6,000 / 9,000 / 12,000). keep_last_checkpoints: 5 applies only to the
+#   regular 3,000-step checkpoints; epoch-end checkpoints never consume those slots
+#   and are never pruned.
+model:
+  path: /home/user/models/MOSS-Image-Base
+  dtype: bf16
+  local_files_only: true
+data:
+  cache_dir: /home/user/cache/clean30_v4_1m
+  num_workers: 4
+  batch_size: 8
+  drop_last: true
+  pin_memory: true
+train:
+  device: cuda
+  output_dir: /home/user/runs/clean30_v4_5ep_r64_bs8
+  max_steps: 13070
+  gradient_accumulation_steps: 1
+  learning_rate: 1.5e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  warmup_steps: 200
+  lr_scheduler: cosine
+  max_grad_norm: 1.0
+  seed: 42
+  gradient_checkpointing: true
+  batched_forward: true
+  selective_checkpointing: "off"
+  compile: false
+  compile_mode: default
+  sdpa_backend: auto
+  ema_decay: 0.0
+  timestep_sampling: logit_normal
+  logit_normal_mean: -0.40
+  logit_normal_std: 0.95
+  sigma_cutoff: 0.95
+  uniform_mix: 0.01
+  keep_last_checkpoints: 5
+  save_epoch: true
+lora:
+  rank: 64
+  alpha: 64
+  dropout: 0.0
+  targets: [q, k, v, o, ffn_up_gate, ffn_down]
+  text_projection: false
+  final_linear: false
+logging:
+  log_every: 20
+  save_every: 3000
+  sample_every: 3000
+  sample_steps: 30
+  sample_cfg: 3.0
+  sample_skip_layer: 22
+  sample_negative_prompt: "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
+  sample_val_ids: [item_00000, item_03000, item_06000, item_09000,
+                   item_12000, item_15000, item_18000, item_20000]
+  comfy_export: true
+  comfy_export_checkpoints: false

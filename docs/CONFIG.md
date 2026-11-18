@@ -46,6 +46,8 @@ train:
   max_grad_norm: 1.0
   seed: 42
   gradient_checkpointing: true
+  batched_forward: true
+  selective_checkpointing: "off"
   compile: false
   compile_mode: default
   sdpa_backend: auto
@@ -99,7 +101,9 @@ logging:
 | `train.lr_scheduler` | `cosine` | 可选 `constant`；LoRA 短跑常用后者 |
 | `train.max_grad_norm` | `1.0` | 对齐报告；出现尖峰时不要盲目调大 |
 | `train.gradient_checkpointing` | `true` | 1M 必开；512 在大 batch 时也建议开 |
-| `train.compile` | `false` | 首次编译慢；稳定形状后再开，见 [5090.md](5090.md) |
+| `train.batched_forward` | `true` | 整 batch 一次前向，CUDA bf16/fp16 下注意力走 flash varlen（无 padding、无 S² 物化），与逐样本循环数学等价但非逐位一致；batch>1 更快，但 checkpoint 重算时同时持有整 batch 中间量，峰值显存更高（1M bs8 下约 +1–2GB 量级，OOM 时改回 `false`）。`false` 恢复上游逐样本路径 |
+| `train.selective_checkpointing` | `off` | 选择性激活 checkpoint：`attention`/`matmul` 策略保存注意力（及矩阵乘）输出、只重算 elementwise 链，梯度不变。3070 代理实测 1M 级约 -6.5% step 时间、峰值 +0.8GiB（12 层 dim1024）；**9B bs8 1M 下保存量约 +9GB，32GB 卡不要开**；512 bs4 约 +1.2GB 可考虑。需 `gradient_checkpointing: true` |
+| `train.compile` | `false` | 逐 DiT block 编译（与 gradient checkpointing 兼容，融合 norm/激活/LoRA elementwise 链）；首次编译慢，所有 block 共享一张图。与 `batched_forward` 叠加在 3070 代理模型上实测 1.8–2.4×，见 [5090.md](5090.md) |
 | `train.compile_mode` | `default` | `reduce-overhead` 用 CUDA Graphs，显存更高、对动态形状更敏感 |
 | `train.sdpa_backend` | `auto` | 可强制 `flash` / `efficient` / `cudnn` / `math` 做对比 |
 | `train.ema_decay` | `0.0` | 0=关闭；开启后额外保存一份 LoRA 权重；0.999 适合 1k+ 步 |
