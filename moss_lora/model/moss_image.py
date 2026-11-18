@@ -55,6 +55,12 @@
 #      (and, with policy='matmul', mm/addmm/bmm) outputs, and _checkpoint_kwargs
 #      threading context_fn into both checkpoint call sites. Gradients are unchanged;
 #      only the save/recompute split differs.
+#  12. torch._dynamo.mark_dynamic on the sequence dim of x/rope (and the key dim of
+#      attn_mask in forward_batched) before the block loops, so varying bucket/text
+#      shapes compile a dynamic graph from the first step. Avoids the static->dynamic
+#      transition that makes checkpoint recompute pick a different graph (torch#166926).
+#      Guarded by torch.compiler.is_compiling() (mark_dynamic is forbidden inside a
+#      traced region); no-op annotation in eager mode; no math change.
 #
 # No math, module structure, state-dict keys, scheduler or pipeline behavior is changed
 # (modifications 7-9 are bit-identical rewrites/caches); the file is otherwise
@@ -451,6 +457,10 @@ class MOSSImageTransformer(ModelMixin, ConfigMixin):
         x = torch.cat((video, text), 1)
         keys = torch.cat((torch.ones(batch, tokens, dtype=torch.bool, device=x.device), mask), 1)
         attn_mask = keys[:, None, None, :]
+        if not torch.compiler.is_compiling():
+            torch._dynamo.mark_dynamic(x, 1)
+            torch._dynamo.mark_dynamic(rope, 1)
+            torch._dynamo.mark_dynamic(attn_mask, 3)
         for layer_index, layer in enumerate(self.layers):
             if layer_index not in skip_layers:
                 if self.training and self.gradient_checkpointing:
@@ -509,6 +519,9 @@ class MOSSImageTransformer(ModelMixin, ConfigMixin):
             rope = self.rope(height, width, context.shape[1], hidden_states.device).to(video.dtype)
             text = self.text_embedder(context, rope[:, height * width:])
             x = torch.cat((video, text), 1)
+            if not torch.compiler.is_compiling():
+                torch._dynamo.mark_dynamic(x, 1)
+                torch._dynamo.mark_dynamic(rope, 1)
             for layer_index, layer in enumerate(self.layers):
                 if layer_index not in skip_layers:
                     if self.training and self.gradient_checkpointing:

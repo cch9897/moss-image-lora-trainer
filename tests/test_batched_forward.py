@@ -199,16 +199,16 @@ def test_trainer_compile_per_block_cuda(tmp_path, tiny_model_dir, tiny_cache):
         model={"path": str(tiny_model_dir), "dtype": "bf16"},
         data={"cache_dir": str(tiny_cache)},
         train={"output_dir": str(tmp_path / "run"), "device": "cuda",
-               "max_steps": 2, "compile": True},
+               "max_steps": 4, "compile": True},
     )
     result = trainer.train(load_config(write_config(tmp_path / "c1.yaml", **overrides)))
-    assert result["steps"] == 2
+    assert result["steps"] == 4
     run_dir = Path(result["output_dir"])
     raw = load_file(str(run_dir / "adapter_model.safetensors"))
     assert raw and all("_orig_mod" not in key for key in raw)
     ema = load_file(str(run_dir / "adapter_ema.safetensors"))
     assert ema and all("_orig_mod" not in key for key in ema)
-    overrides["train"]["max_steps"] = 4
+    overrides["train"]["max_steps"] = 8
     resumed = trainer.train(load_config(write_config(tmp_path / "c2.yaml", **overrides)),
-                            resume_path=str(run_dir / "checkpoints" / "step_000002"))
-    assert resumed["steps"] == 4
+                            resume_path=str(run_dir / "checkpoints" / "step_000004"))
+    assert resumed["steps"] == 8

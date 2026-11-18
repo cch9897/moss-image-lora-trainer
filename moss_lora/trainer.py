@@ -19,6 +19,7 @@ import shutil
 import sys
 import time
 from collections import Counter
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -413,6 +414,31 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
     lr_scheduler = build_lr_scheduler(optimizer, config.train)
     ema = ParamEMA(trainable_named, config.train.ema_decay) if config.train.ema_decay > 0 else None
     if config.train.compile:
+        # torch#166926: with varying bucket/text shapes the first batches compile a
+        # static graph, later ones a dynamic graph; LRU reordering of the graph cache
+        # can then make checkpoint recompute pick a different graph than the forward,
+        # raising CheckpointError (metadata mismatch). Keep guard-check order stable.
+        try:
+            torch._C._dynamo.eval_frame._set_lru_cache(False)
+        except AttributeError:
+            pass
+        # Compiled autograd's unpack hooks mis-handle checkpoint recomputation when
+        # many compiled regions are alive (bs>1 per-sample loop): eager engine instead.
+        torch._dynamo.config.compiled_autograd = False
+        # Per-sample text lengths create many shape/alignment variants, and global-state
+        # guards (e.g. num_threads) can also invalidate graphs; the default recompile
+        # limit (8) would silently fall back to eager, and a compiled forward + eager
+        # recompute mismatches checkpoint metadata.
+        torch._dynamo.config.cache_size_limit = 128
+        torch._dynamo.config.recompile_limit = 128
+        torch._dynamo.config.accumulated_recompile_limit = 1024
+        # The autograd engine runs checkpoint recomputation on its own thread with
+        # num_threads=1; dynamo's GLOBAL_STATE guard captures the main thread's value
+        # at compile time, so any difference forces a recompile during recomputation
+        # (compiled forward + differently-compiled recompute => checkpoint metadata
+        # mismatch). Pin the main thread to 1 so both sides agree; GPU training does
+        # not rely on main-thread CPU parallelism.
+        torch.set_num_threads(1)
         # Compile each DiT block instead of the whole transformer: whole-model compile
         # hits graph breaks inside the checkpointed block loop and falls back to eager,
         # while per-block compile fuses the norm/activation/LoRA elementwise chains and
@@ -484,7 +510,12 @@ def train(config: TrainerConfig, resume_path: str | None = None) -> dict[str, An
                                  dtype=torch.float32).view(-1, 1, 1, 1)
             x0_fp32 = x0.float()
             noisy = (1.0 - sigma) * x0_fp32 + sigma * noise
-            with sdpa_context(config.train.sdpa_backend):
+            # torch#166926 companion: with compiled blocks, checkpoint early-stop can
+            # make recomputation trace a different graph than the forward (dtype/layout
+            # metadata mismatch). Disabling early-stop only needs to cover the forward.
+            early_stop_ctx = (torch.utils.checkpoint.set_checkpoint_early_stop(False)
+                              if config.train.compile else nullcontext())
+            with sdpa_context(config.train.sdpa_backend), early_stop_ctx:
                 # Passing the python list keeps the timestep sinusoid on the CPU/table
                 # path instead of launching fp64 kernels on the GPU every step.
                 prediction = model(noisy, timesteps, context, mask, return_dict=False)[0]

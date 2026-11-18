@@ -30,7 +30,7 @@ train:
   batched_forward: false  # verified on 5090: per-sample + compile is fastest at 1M (8.15 vs 8.75 s/step bs8) and saves 5GiB
   selective_checkpointing: "off"
   compile: true
-  compile_mode: max-autotune-no-cudagraphs
+  compile_mode: default  # max-autotune re-tunes per concrete shape: autotune storm on varying buckets
   sdpa_backend: auto
   ema_decay: 0.0
   timestep_sampling: logit_normal
