@@ -30,7 +30,7 @@ train:
   gradient_checkpointing: true
   batched_forward: true
   selective_checkpointing: "off"
-  compile: false
+  compile: true
   compile_mode: default
   sdpa_backend: auto
   ema_decay: 0.0

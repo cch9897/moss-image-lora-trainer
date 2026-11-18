@@ -33,10 +33,10 @@ train:
   max_grad_norm: 1.0
   seed: 42
   gradient_checkpointing: true
-  batched_forward: true
+  batched_forward: false  # verified on 5090: per-sample + compile is fastest at 1M (8.15 vs 8.75 s/step bs8) and saves 5GiB
   selective_checkpointing: "off"
-  compile: false
-  compile_mode: default
+  compile: true
+  compile_mode: max-autotune-no-cudagraphs
   sdpa_backend: auto
   ema_decay: 0.0
   timestep_sampling: logit_normal
